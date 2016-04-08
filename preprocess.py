@@ -209,10 +209,8 @@ def main(arguments):
 
     # Get word vecs
     print 'Getting word vecs...'
-    word_vecs = load_word_vecs(WORD_VECS_PATH, word_to_idx)
+    word_vecs = load_word_vecs(word_vecs, word_to_idx)
     embed = np.random.uniform(-0.25, 0.25, (V, len(word_vecs.values()[0])))
-    # zero out padding
-    embed[0] = 0
     for word, vec in word_vecs.items():
         embed[word_to_idx[word] - 1] = vec
 
@@ -227,6 +225,7 @@ def main(arguments):
             f['test_input'] = test_input
         f['nfeatures'] = np.array([V], dtype=np.int32)
         f['nclasses'] = np.array([C], dtype=np.int32)
+        f['word_vecs'] = embed
 
 
 if __name__ == '__main__':
