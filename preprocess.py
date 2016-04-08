@@ -12,8 +12,6 @@ import codecs
 
 # Your preprocessing, features construction, and word2vec code.
 
-
-
 def get_tag_ids(tag_dict):
     # Construct tag to id mapping
     tag_to_id = {}
@@ -22,32 +20,42 @@ def get_tag_ids(tag_dict):
             tag, id_num = tuple(line.split())
             tag_to_id[tag] = int(id_num)
     # For test set, _ is an unknown tag
-    tag_to_id['_'] = 0
+    tag_to_id['<t>'] = 8
+    tag_to_id['</t>'] = 9
     return tag_to_id
 
-def convert_data(data_name, word_to_idx, tag_to_id, dataset):
+def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, dataset):
     # Construct index feature sets for each file
     idx_features = []
+    suffix_features = []
+    prefix_features = []
     lbl = []
     ids = []
     max_lbls = 1
     with open(data_name, "r") as f:
         # initial padding
         idx_features.extend([1])
-        lbl.append([0])
+        suffix_features.extend([1])
+        prefix_features.extend([1])
+        lbl.append([8])
         ids.extend([0])
 
         for line in f:
             line = line.rstrip()
             if len(line) == 0:
                 # add padding
-                idx_features.extend([1])
-                lbl.append([0])
-                ids.extend([0])
+                idx_features.extend([1,2])
+                suffix_features.extend([1,2])
+                prefix_features.extend([1,2])
+                lbl.append([8])
+                lbl.append([9])
+                ids.extend([-1,0])
             else:
                 line = line.split()
                 global_id = line[0]
                 word = line[2]
+                suffix = word[-2:]
+                prefix = word[:2]
                 tags = [0]
                 if len(line) > 3:
                     tags = line[3:]
@@ -56,10 +64,14 @@ def convert_data(data_name, word_to_idx, tag_to_id, dataset):
                         max_lbls = len(tags)
 
                 idx_features.append(word_to_idx[word])
+                suffix_features.append(suffix_to_idx[suffix])
+                prefix_features.append(prefix_to_idx[prefix])
                 ids.append(global_id)
         # end padding
-        idx_features.extend([1])
-        lbl.append([0])
+        idx_features.extend([2])
+        suffix_features.extend([2])
+        prefix_features.extend([2])
+        lbl.append([9])
         ids.extend([0])
 
     # Normalize lbl length
@@ -67,13 +79,17 @@ def convert_data(data_name, word_to_idx, tag_to_id, dataset):
         if len(lbl[i]) < max_lbls:
             lbl[i].extend([0] * (max_lbls - len(lbl[i])))
 
-    return np.array(idx_features, dtype=np.int32), np.array(lbl, dtype=np.int32), np.array(ids, dtype=np.int32)
+    return np.array(idx_features, dtype=np.int32), np.array(suffix_features, dtype=np.int32), np.array(prefix_features, dtype=np.int32), np.array(lbl, dtype=np.int32), np.array(ids, dtype=np.int32)
 
 def get_vocab(file_list, dataset=''):
     # Construct index feature dictionary.
     word_to_idx = {}
-    # Start at 2 (1 is padding)
-    idx = 2
+    suffix_to_idx = {}
+    prefix_to_idx = {}
+    # Start at 3 (1, 2 is start/end of sentence)
+    idx = 3
+    suffix_idx = 3
+    prefix_idx = 3
     for filename in file_list:
         if filename:
             with codecs.open(filename, "r", encoding="latin-1") as f:
@@ -82,11 +98,19 @@ def get_vocab(file_list, dataset=''):
                     if len(line) == 0:
                         continue
                     word = tuple(line.split())[2]
+                    suffix = word[-2:]
+                    prefix = word[:2]
                     if word not in word_to_idx:
                         word_to_idx[word] = idx
                         idx += 1
+                    if suffix not in suffix_to_idx:
+                        suffix_to_idx[suffix] = suffix_idx
+                        suffix_idx += 1
+                    if prefix not in prefix_to_idx:
+                        prefix_to_idx[prefix] = prefix_idx
+                        prefix_idx += 1
 
-    return word_to_idx
+    return word_to_idx, suffix_to_idx, prefix_to_idx
 
 def load_word_vecs(file_name, vocab):
     # Get word vecs from glove
@@ -125,17 +149,17 @@ def main(arguments):
 
     # Get index features
     print 'Getting vocab...'
-    word_to_idx = get_vocab([train, valid, test], dataset)
+    word_to_idx, suffix_to_idx, prefix_to_idx = get_vocab([train, valid, test], dataset)
 
     # Convert data
     print 'Processing data...'
-    train_input, train_output, _ = convert_data(train, word_to_idx, tag_to_id, dataset)
+    train_input, train_suffix_input, train_prefix_input, train_output, _ = convert_data(train, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, dataset)
 
     if valid:
-        valid_input, valid_output, _ = convert_data(valid, word_to_idx, tag_to_id, dataset)
+        valid_input, valid_suffix_input, valid_prefix_input, valid_output, _ = convert_data(valid, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, dataset)
 
     if test:
-        test_input, _, test_ids = convert_data(test, word_to_idx, tag_to_id, dataset)
+        test_input, test_suffix_input, test_prefix_input, _, test_ids = convert_data(test, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, dataset)
 
     # +1 for padding
     V = len(word_to_idx) + 1
@@ -157,9 +181,13 @@ def main(arguments):
     filename = args.dataset + '.hdf5'
     with h5py.File(filename, "w") as f:
         f['train_input'] = train_input
+        f['train_suffix_input'] = train_suffix_input
+        f['train_prefix_input'] = train_prefix_input
         f['train_output'] = train_output
         if valid:
             f['valid_input'] = valid_input
+            f['valid_suffix_input' ] = valid_suffix_input
+            f['valid_prefix_input'] = valid_prefix_input
             f['valid_output'] = valid_output
         if test:
             f['test_input'] = test_input
