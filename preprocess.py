@@ -27,13 +27,13 @@ def get_tag_ids(tag_dict):
 
 def convert_data(data_name, word_to_idx, tag_to_id, dataset):
     # Construct index feature sets for each file
-    bow_features = []
+    idx_features = []
     lbl = []
     ids = []
     max_lbls = 1
     with open(data_name, "r") as f:
         # initial padding
-        bow_features.extend([1])
+        idx_features.extend([1])
         lbl.append([0])
         ids.extend([0])
 
@@ -41,7 +41,7 @@ def convert_data(data_name, word_to_idx, tag_to_id, dataset):
             line = line.rstrip()
             if len(line) == 0:
                 # add padding
-                bow_features.extend([1])
+                idx_features.extend([1])
                 lbl.append([0])
                 ids.extend([0])
             else:
@@ -55,10 +55,10 @@ def convert_data(data_name, word_to_idx, tag_to_id, dataset):
                     if len(tags) > max_lbls:
                         max_lbls = len(tags)
 
-                bow_features.append(word_to_idx[word])
+                idx_features.append(word_to_idx[word])
                 ids.append(global_id)
         # end padding
-        bow_features.extend([1])
+        idx_features.extend([1])
         lbl.append([0])
         ids.extend([0])
 
@@ -67,7 +67,7 @@ def convert_data(data_name, word_to_idx, tag_to_id, dataset):
         if len(lbl[i]) < max_lbls:
             lbl[i].extend([0] * (max_lbls - len(lbl[i])))
 
-    return np.array(bow_features, dtype=np.int32), np.array(lbl, dtype=np.int32), np.array(ids, dtype=np.int32)
+    return np.array(idx_features, dtype=np.int32), np.array(lbl, dtype=np.int32), np.array(ids, dtype=np.int32)
 
 def get_vocab(file_list, dataset=''):
     # Construct index feature dictionary.
