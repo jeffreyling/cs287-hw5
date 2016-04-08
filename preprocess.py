@@ -161,8 +161,8 @@ def main(arguments):
     if test:
         test_input, test_suffix_input, test_prefix_input, _, test_ids = convert_data(test, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, dataset)
 
-    # +1 for padding
-    V = len(word_to_idx) + 1
+    # +2 for padding
+    V = len(word_to_idx) + 2
     print('Vocab size:', V)
 
     # -1 for _ tag
@@ -174,8 +174,9 @@ def main(arguments):
     embed = np.random.uniform(-0.25, 0.25, (V, len(word_vecs.values()[0])))
     # zero out padding
     embed[0] = 0
+    embed[1] = 0
     for word, vec in word_vecs.items():
-        embed[word_to_idx[word] - 1] = vec
+        embed[word_to_idx[word] - 2] = vec
 
     print 'Saving...'
     filename = args.dataset + '.hdf5'
