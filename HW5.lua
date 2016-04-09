@@ -3,15 +3,22 @@ require("hdf5")
 require("nn")
 require("optim")
 
+-- TODO: fix padding!!!!!
+-- need to fix padding for viterbi, MEMM training
+
 cmd = torch.CmdLine()
 
 -- Cmd Args
 cmd:option('-datafile', '', 'data file')
-cmd:option('-classifier', 'hmm', 'classifier to use: hmm, memm')
+cmd:option('-classifier', 'hmm', 'classifier to use: hmm, memm, perceptron')
 
 -- Hyperparameters
 cmd:option('-alpha', 0.1, 'smoothing alpha')
 cmd:option('-beta', 1, 'beta for F-score')
+
+cmd:option('-eta', 0.01, 'learning rate for SGD')
+cmd:option('-batch_size', 32, 'batch size for SGD')
+cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
 
 function get_hmm_probs(X, Y)
   local alpha = opt.alpha
@@ -95,6 +102,14 @@ function MEMM()
   return model
 end
 
+function perceptron()
+  local model = nn.Sequential()
+  model:add(nn.LookupTable(nfeatures, nclasses))
+  -- no softmax or bias (?)
+
+  return model
+end
+
 function compute_fscore(total_predicted_correct, total_predicted, total_correct, beta)
   local prec = total_predicted_correct / total_predicted
   local rec = total_predicted_correct / total_correct
@@ -134,7 +149,12 @@ function model_eval(model, criterion, X, Y)
 end
 
 function train_model(X, Y, valid_X, valid_Y)
-  local eta = opt.eta
+  local eta
+  if opt.classifier == 'memm' then
+    eta = opt.eta
+  elseif opt.classifier == 'perceptron' then
+    eta = 1
+  end
   local batch_size = opt.batch_size
   local max_epochs = opt.max_epochs
   local N = X:size(1)
@@ -142,9 +162,8 @@ function train_model(X, Y, valid_X, valid_Y)
   local model
   if opt.classifier == 'memm' then
     model = MEMM()
-  else
-    -- asdf
-    asdf
+  elseif opt.classifier == 'perceptron' then
+    model = perceptron()
   end
 
   local criterion = nn.ClassNLLCriterion()
@@ -183,28 +202,52 @@ function train_model(X, Y, valid_X, valid_Y)
           --local X_cap_batch = X_cap:narrow(1, batch, sz)
           local Y_batch = Y:narrow(1, batch, sz)
 
-          -- closure to return err, df/dx
-          local func = function(x)
-            -- get new parameters
-            if x ~= params then
-              params:copy(x)
+          local func
+          if opt.classifier == 'memm' then
+            -- closure to return err, df/dx
+            func = function(x)
+              -- get new parameters
+              if x ~= params then
+                params:copy(x)
+              end
+              -- reset gradients
+              grads:zero()
+
+              -- forward
+              local inputs = X_batch
+              local outputs = model:forward(inputs)
+              local loss = criterion:forward(outputs, Y_batch)
+
+              -- track errors
+              total_loss = total_loss + loss * batch_size
+
+              -- compute gradients
+              local df_do = criterion:backward(outputs, Y_batch)
+              model:backward(inputs, df_do)
+
+              return loss, grads
             end
-            -- reset gradients
-            grads:zero()
+          elseif opt.classifier == 'perceptron' then
+            func = function(x)
+              -- get new parameters
+              if x ~= params then
+                params:copy(x)
+              end
+              -- reset gradients
+              grads:zero()
 
-            -- forward
-            local inputs = X_batch
-            local outputs = model:forward(inputs)
-            local loss = criterion:forward(outputs, Y_batch)
+              -- forward
+              local inputs = X_batch
 
-            -- track errors
-            total_loss = total_loss + loss * batch_size
+              -- do Viterbi on each input with this model
+              -- diff each result with Y_batch (gold) to get grads
+              -- recompute (?) and then construct grads
+              -- backward
 
-            -- compute gradients
-            local df_do = criterion:backward(outputs, Y_batch)
-            model:backward(inputs, df_do)
+              return loss, grads
+            end
 
-            return loss, grads
+            -- maybe manually sgd
           end
 
           optim.sgd(func, params, state)
@@ -263,6 +306,8 @@ function main()
      local seq = viterbi(X, nil, nil, model)
      local fscore = score_seq(seq, Y)
      print('Valid F-score:', fscore)
+   elseif opt.classifier == 'perceptron' then
+     -- a???
    end
 end
 

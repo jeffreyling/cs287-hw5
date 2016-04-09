@@ -8,7 +8,6 @@ import h5py
 import argparse
 import sys
 import re
-import codecs
 
 # Your preprocessing, features construction, and word2vec code.
 
@@ -54,7 +53,7 @@ def convert_data(data_name, word_to_idx, suffix_to_idx, tag_to_id, window_size, 
     window_suffix_features = []
     window_lbl = []
     window_ids = []
-    with codecs.open(data_name, "r", encoding="latin-1") as f:
+    with open(data_name, "r") as f:
         # initial padding
         features.extend([1] * (window_size/2))
         cap_features.extend([1] * (window_size/2))
@@ -72,7 +71,8 @@ def convert_data(data_name, word_to_idx, suffix_to_idx, tag_to_id, window_size, 
                 lbl.extend([0] * (window_size/2))
                 ids.extend([0] * (window_size/2))
             else:
-                global_id, _, word, tag = tuple(line.split('\t'))
+                print line
+                global_id, _, word, tag = tuple(line.split())
                 lower_caps = int(word.islower())
                 all_caps = int(word.isupper())
                 first_letter_cap = int(word[0].isupper())
@@ -126,12 +126,12 @@ def get_vocab(file_list, common_words_list, dataset=''):
     suffix_idx = 2
     for filename in file_list:
         if filename:
-            with codecs.open(filename, "r", encoding="latin-1") as f:
+            with open(filename, "r") as f:
                 for line in f:
                     line = line.rstrip()
                     if len(line) == 0:
                         continue
-                    _, _, word, _ = tuple(line.split('\t'))
+                    word = line.split()[2]
                     word = clean_str(word, common_words_list)
                     if word not in word_to_idx:
                         word_to_idx[word] = idx
