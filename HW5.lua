@@ -150,11 +150,60 @@ function compute_fscore(total_predicted_correct, total_predicted, total_correct,
   return (beta * beta + 1) * prec * rec / (beta * beta * prec + rec)
 end
 
-function score_seq(seq, Y)
+function get_mentions(seq)
   local N = seq:size(1)
-  assert(Y:size(1) == N)
-  local total_predicted_correct = seq:eq(Y):sum()
-  return total_predicted_correct
+  local seq_mentions = {}
+
+  local cur_mention = seq[2]
+  local cur_start = 2
+  for i = 3, N-1 do
+    -- transition to new mention.
+    if seq[i] ~= cur_mention then
+      local str
+      if cur_start == i-1 then str = tostring(i-2) else str = (cur_start-1) .. '-' .. (i-2) end
+      if seq_mentions[cur_mention] == nil then
+        seq_mentions[cur_mention] = {}
+        seq_mentions[cur_mention][str] = true
+      else
+        seq_mentions[cur_mention][str] = true
+      end
+      cur_mention = seq[i]
+      cur_start = i
+    end
+  end
+  
+  seq_mentions[1] = nil -- no need for O mentions
+  return seq_mentions
+end
+
+function score_seq(seq, Y)
+  assert(Y:size(1) == seq:size(1))
+  local pred_correct = 0
+  local pred = 0
+  local correct = 0
+      
+  local seq_mentions = get_mentions(seq)
+  local Y_mentions = get_mentions(Y)
+
+  for name,m in pairs(seq_mentions) do
+    for k,_ in pairs(m) do
+      if Y_mentions[name] ~= nil and Y_mentions[name][k] ~= nil then
+        pred_correct = pred_correct + 1
+      end
+      pred = pred + 1
+    end
+  end
+  for _,m in pairs(Y_mentions) do
+    for k,_ in pairs(m) do
+      correct = correct + 1
+    end
+  end
+
+  --print(seq_mentions)
+  --print(Y_mentions)
+  --print(pred_correct, pred, correct)
+  --io.read()
+  return pred_correct, pred, correct
 end
 
 function model_eval(model, criterion, X, Y)
@@ -330,6 +379,7 @@ function main()
    end_word = 2
    start_tag = 8
    end_tag = 9
+   tags = {'O', 'I-PER', 'I-LOC', 'I-ORG', 'I-MISC', 'B-MISC', 'B-LOC'}
 
    if opt.classifier == 'hmm' then
      local transitions, emissions = get_hmm_probs(X, Y)
@@ -337,20 +387,22 @@ function main()
 
      local timer = torch.Timer()
      local time = timer:time().real
-     local total_predicted_correct = 0
-     local total_predicted = 0
+     -- predicted entities
+     local tot_pred_correct = 0
+     local tot_pred = 0
+     local tot_correct = 0
      for i = 1, valid_X:size(1) do
        local seq = viterbi(valid_X[i], transitions, emissions, nil)
        local Y_seq = strip_padding(valid_Y[i], end_tag)
 
-       local seq_predicted_correct = score_seq(seq, Y_seq)
-       total_predicted_correct = total_predicted_correct + seq_predicted_correct
-       total_predicted = total_predicted + seq:size(1)
+       local pred_correct, pred, correct = score_seq(seq, Y_seq)
+       tot_pred_correct = tot_pred_correct + pred_correct
+       tot_pred = tot_pred + pred
+       tot_correct = tot_correct + correct
      end
 
-     local total_correct = total_predicted
      print('Viterbi time:', (timer:time().real - time) * 1000, 'ms')
-     local fscore = compute_fscore(total_predicted_correct, total_predicted, total_correct)
+     local fscore = compute_fscore(tot_pred_correct, tot_pred, tot_correct)
      print('Valid F-score:', fscore)
    elseif opt.classifier == 'memm' then
      local model = train_model(X, Y, valid_X, valid_Y)
