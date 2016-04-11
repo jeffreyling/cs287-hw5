@@ -9,7 +9,30 @@ import argparse
 import sys
 import re
 
+# TODO: consider rare words?
 # Your preprocessing, features construction, and word2vec code.
+
+START_WORD = 1
+END_WORD = 2
+START_TAG = 8
+END_TAG = 9
+
+def clean_str(s, common_words_list):
+    s = s.strip().lower()
+    if s not in common_words_list:
+        return 'UNK'
+
+    return s
+
+def get_common_words(file_name):
+    # Get list of common words from glove file (change to trie if this is slow)
+    common_words_list = set()
+    with open(file_name, "r") as f:
+        for line in f:
+            word = line.split(' ')[0]
+            common_words_list.add(word)
+    return common_words_list
+
 
 def get_tag_ids(tag_dict):
     # Construct tag to id mapping
@@ -18,84 +41,92 @@ def get_tag_ids(tag_dict):
         for line in f:
             tag, id_num = tuple(line.split())
             tag_to_id[tag] = int(id_num)
-    tag_to_id['<t>'] = 8
-    tag_to_id['</t>'] = 9
+    # Start, end of sentence tags
+    tag_to_id['<t>'] = START_TAG
+    tag_to_id['</t>'] = END_TAG
     return tag_to_id
 
-def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, dataset):
-    # Construct index feature sets for each file
+def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, dataset, max_sent_len=0, test=False):
+    # Construct index feature sets for each file. One sentence per row
     idx_features = []
     suffix_features = []
     prefix_features = []
     lbl = []
     ids = []
-    max_lbls = 1
-    with open(data_name, "r") as f:
-        # initial padding
-        idx_features.extend([1])
-        suffix_features.extend([1])
-        prefix_features.extend([1])
-        lbl.append([8])
-        ids.extend([0])
 
+    sent = 0
+    new_sent = True
+    with open(data_name, "r") as f:
         for line in f:
-            line = line.rstrip()
+            line = line.strip().split()
             if len(line) == 0:
-                # add padding
-                idx_features.extend([1,2])
-                suffix_features.extend([1,2])
-                prefix_features.extend([1,2])
-                lbl.append([8])
-                lbl.append([9])
-                ids.extend([-1,0])
+                # end padding
+                cur_len = len(idx_features[sent])
+                idx_features[sent].extend([2] * (max_sent_len - cur_len))
+                suffix_features[sent].extend([2] * (max_sent_len - cur_len))
+                prefix_features[sent].extend([2] * (max_sent_len - cur_len))
+                ids[sent].extend([0] * (max_sent_len - cur_len))
+                if not test:
+                    lbl[sent].extend([END_TAG] * (max_sent_len - cur_len))
+                sent += 1
+                new_sent = True
             else:
-                line = line.split()
+                if new_sent:
+                    # initial padding
+                    idx_features.append([1])
+                    suffix_features.append([1])
+                    prefix_features.append([1])
+                    ids.append([0])
+                    if not test:
+                        lbl.append([START_TAG])
+                    new_sent = False
+
                 global_id = line[0]
-                word = line[2]
+                ids[sent].append(global_id)
+
+                # X
+                word = clean_str(line[2], common_words_list)
                 suffix = word[-2:]
                 prefix = word[:2]
-                tags = [0]
-                if len(line) > 3:
-                    tags = line[3:]
-                    lbl.append([tag_to_id[tag] for tag in tags])
-                    if len(tags) > max_lbls:
-                        max_lbls = len(tags)
+                idx_features[sent].append(word_to_idx[word])
+                suffix_features[sent].append(suffix_to_idx[suffix])
+                prefix_features[sent].append(prefix_to_idx[prefix])
 
-                idx_features.append(word_to_idx[word])
-                suffix_features.append(suffix_to_idx[suffix])
-                prefix_features.append(prefix_to_idx[prefix])
-                ids.append(global_id)
-        # end padding
-        idx_features.extend([2])
-        suffix_features.extend([2])
-        prefix_features.extend([2])
-        lbl.append([9])
-        ids.extend([0])
+                if not test:
+                    assert len(line) == 4
+                    # Y
+                    tag = line[3]
+                    lbl[sent].append(tag_to_id[tag])
 
     # Normalize lbl length
-    for i in range(len(lbl)):
-        if len(lbl[i]) < max_lbls:
-            lbl[i].extend([0] * (max_lbls - len(lbl[i])))
+    # for i in range(len(lbl)):
+        # if len(lbl[i]) < max_lbls:
+            # lbl[i].extend([0] * (max_lbls - len(lbl[i])))
 
     return np.array(idx_features, dtype=np.int32), np.array(suffix_features, dtype=np.int32), np.array(prefix_features, dtype=np.int32), np.array(lbl, dtype=np.int32), np.array(ids, dtype=np.int32)
 
-def get_vocab(file_list, dataset=''):
+def get_vocab(file_list, common_words_list, dataset=''):
     # Construct index feature dictionary.
-    word_to_idx = {}
+    word_to_idx = {'<s>': 1, '</s>': 2}
     suffix_to_idx = {}
     prefix_to_idx = {}
     # Start at 3 (1, 2 is start/end of sentence)
     idx = 3
-    suffix_idx = 3
-    prefix_idx = 3
+    suffix_idx = 1
+    prefix_idx = 1
+    max_sent_len = 0
     for filename in file_list:
         if filename:
             with open(filename, "r") as f:
+                sent_len = 0
                 for line in f:
                     line = line.rstrip()
                     if len(line) == 0:
+                        max_sent_len = max(max_sent_len, sent_len)
+                        sent_len = 0
                         continue
-                    word = tuple(line.split())[2]
+                    word = clean_str(line.split()[2], common_words_list)
+                    sent_len += 1
                     suffix = word[-2:]
                     prefix = word[:2]
                     if word not in word_to_idx:
@@ -108,7 +139,9 @@ def get_vocab(file_list, dataset=''):
                         prefix_to_idx[prefix] = prefix_idx
                         prefix_idx += 1
 
-    return word_to_idx, suffix_to_idx, prefix_to_idx
+    max_sent_len += 2 # For start and end padding
+    word_to_idx['UNK'] = len(word_to_idx) + 1
+    return word_to_idx, suffix_to_idx, prefix_to_idx, max_sent_len
 
 def load_word_vecs(file_name, vocab):
     # Get word vecs from glove
@@ -145,36 +178,39 @@ def main(arguments):
     print 'Get tag ids...'
     tag_to_id = get_tag_ids(tag_dict)
 
+    # Retrieve common words
+    print 'Getting common words...'
+    common_words_list = get_common_words(WORD_VECS_PATH)
+
     # Get index features
     print 'Getting vocab...'
-    word_to_idx, suffix_to_idx, prefix_to_idx = get_vocab([train, valid, test], dataset)
+    word_to_idx, suffix_to_idx, prefix_to_idx, max_sent_len = get_vocab([train, valid, test], common_words_list, dataset)
 
     # Convert data
     print 'Processing data...'
-    train_input, train_suffix_input, train_prefix_input, train_output, _ = convert_data(train, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, dataset)
+    train_input, train_suffix_input, train_prefix_input, train_output, _ = convert_data(train, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, dataset, max_sent_len)
 
     if valid:
-        valid_input, valid_suffix_input, valid_prefix_input, valid_output, _ = convert_data(valid, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, dataset)
+        valid_input, valid_suffix_input, valid_prefix_input, valid_output, _ = convert_data(valid, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, dataset, max_sent_len)
 
     if test:
-        test_input, test_suffix_input, test_prefix_input, _, test_ids = convert_data(test, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, dataset)
+        test_input, test_suffix_input, test_prefix_input, _, test_ids = convert_data(test, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, dataset, max_sent_len, test=True)
 
-    # +2 for padding
+    # +2 for start, end padding
     V = len(word_to_idx) + 2
     print('Vocab size:', V)
 
-    # -1 for _ tag
-    C = len(tag_to_id) - 1
+    C = len(tag_to_id)
 
     # Get word vecs
     print 'Getting word vecs...'
     word_vecs = load_word_vecs(WORD_VECS_PATH, word_to_idx)
     embed = np.random.uniform(-0.25, 0.25, (V, len(word_vecs.values()[0])))
     # zero out padding
-    embed[0] = 0
-    embed[1] = 0
+    # embed[0] = 0
+    # embed[1] = 0
     for word, vec in word_vecs.items():
-        embed[word_to_idx[word] - 2] = vec
+        embed[word_to_idx[word] - 1] = vec
 
     print 'Saving...'
     filename = args.dataset + '.hdf5'
