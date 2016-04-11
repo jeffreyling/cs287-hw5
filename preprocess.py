@@ -227,7 +227,8 @@ def main(arguments):
         if test:
             f['test_input'] = test_input
             f['test_ids'] = test_ids
-        f['nfeatures'] = np.array([V], dtype=np.int32)
+        f['vocab_size'] = np.array([V], dtype=np.int32)
+        f['nfeatures'] = np.array([V], dtype=np.int32) # TODO: change this with more features!
         f['nclasses'] = np.array([C], dtype=np.int32)
 
         f['word_vecs'] = embed

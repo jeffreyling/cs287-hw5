@@ -8,9 +8,12 @@ cmd = torch.CmdLine()
 -- Cmd Args
 cmd:option('-datafile', '', 'data file')
 cmd:option('-classifier', 'hmm', 'classifier to use: hmm, memm, perceptron')
+cmd:option('-model_out_name', 'train', 'output file name of model')
+cmd:option('-action', 'train', 'train or test')
+cmd:option('-test_model', '', 'model to test on')
 
 -- Hyperparameters
-cmd:option('-alpha', 0.1, 'smoothing alpha')
+cmd:option('-alpha', 0.01, 'smoothing alpha')
 cmd:option('-beta', 1, 'beta for F-score')
 
 cmd:option('-eta', 0.01, 'learning rate for SGD')
@@ -18,15 +21,21 @@ cmd:option('-batch_size', 32, 'batch size for SGD')
 cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
 
 function get_context_features(X, Y)
-  -- Change a sequence X, Y to context features for MEMM
+  -- Change X, Y to context features for MEMM
   -- TODO: include more features
-  local N = X:size(1)
-  local X_context = torch.Tensor(N-1, 2) -- last class, word
-  for i = 2, N do
-    X_context[i-1] = torch.Tensor{X[i], Y[i-1] + vocab_size}
+  local X_context = {} -- torch.Tensor(N-1, 2) -- x_i, c_{i-1}
+  local Y_context = {}
+  for j = 1, X:size(1) do
+    local cur_X = X[j]
+    local cur_Y = Y[j]
+    for i = 2, X:size(2) do
+      if cur_X[i] == end_word and cur_X[i] == cur_X[i-1] then break end
+      table.insert(X_context, {cur_X[i], cur_Y[i-1] + vocab_size})
+      table.insert(Y_context, cur_Y[i])
+    end
   end
-
-  return X_context, Y:narrow(1, 2, N)
+  
+  return torch.LongTensor(X_context), torch.LongTensor(Y_context)
 end
 
 function strip_padding(X, pad)
@@ -78,6 +87,7 @@ function viterbi(X, transitions, emissions, model)
   local N = X:size(1)
   local pi = torch.Tensor(N, nclasses):fill(-math.huge)
   local bp = torch.zeros(N, nclasses):long()
+  local cache = {}
 
   -- initialize
   if model then
@@ -90,12 +100,11 @@ function viterbi(X, transitions, emissions, model)
     for prev_c = 1, nclasses do
       local y_hat
       if model then
-        -- X in context format
-        y_hat = model:forward(X[i])
+        -- batch size 1 for model compatibility
+        y_hat = model:forward(torch.LongTensor{{X[i], prev_c + vocab_size}})
+        y_hat = y_hat:squeeze()
       elseif transitions then
         y_hat = emissions[X[i]] + transitions[prev_c]
-      end
-      if prev_c == 8 then
       end
       for c = 1, nclasses do
         if pi[i-1][prev_c] + y_hat[c] > pi[i][c] then
@@ -123,23 +132,6 @@ function viterbi(X, transitions, emissions, model)
   end
 
   return rev_seq
-end
-
-function MEMM()
-  local model = nn.Sequential()
-  model:add(nn.LookupTable(nfeatures, nclasses))
-  model:add(nn.Add(nclasses)) -- bias
-  model:add(nn.LogSoftMax())
-  
-  return model
-end
-
-function perceptron()
-  local model = nn.Sequential()
-  model:add(nn.LookupTable(nfeatures, nclasses))
-  -- no softmax or bias (?)
-
-  return model
 end
 
 function compute_fscore(total_predicted_correct, total_predicted, total_correct, beta)
@@ -206,6 +198,43 @@ function score_seq(seq, Y)
   return pred_correct, pred, correct
 end
 
+function compute_eval_err(X, Y, transitions, emissions, model)
+   -- predicted entities
+   local tot_pred_correct = 0
+   local tot_pred = 0
+   local tot_correct = 0
+   for i = 1, X:size(1) do
+     local seq = viterbi(X[i], transitions, emissions, model)
+     local Y_seq = strip_padding(Y[i], end_tag)
+
+     local pred_correct, pred, correct = score_seq(seq, Y_seq)
+     tot_pred_correct = tot_pred_correct + pred_correct
+     tot_pred = tot_pred + pred
+     tot_correct = tot_correct + correct
+   end
+
+   local fscore = compute_fscore(tot_pred_correct, tot_pred, tot_correct)
+   return fscore
+ end
+
+function MEMM()
+  local model = nn.Sequential()
+  model:add(nn.LookupTable(nfeatures + nclasses, nclasses))
+  model:add(nn.Sum(2)) -- sum w_i*x_i
+  model:add(nn.Add(nclasses)) -- bias
+  model:add(nn.LogSoftMax())
+  
+  return model
+end
+
+function perceptron()
+  local model = nn.Sequential()
+  model:add(nn.LookupTable(nfeatures, nclasses))
+  -- no softmax or bias (?)
+
+  return model
+end
+
 function model_eval(model, criterion, X, Y)
   -- batch eval
   model:evaluate()
@@ -228,7 +257,7 @@ function model_eval(model, criterion, X, Y)
       total_loss = total_loss + loss * batch_size
   end
 
-  return loss
+  return total_loss / N
 end
 
 function train_model(X, Y, valid_X, valid_Y)
@@ -254,7 +283,6 @@ function train_model(X, Y, valid_X, valid_Y)
   -- shuffle for batches
   local shuffle = torch.randperm(N):long()
   X = X:index(1, shuffle)
-  -- features X?
   Y = Y:index(1, shuffle)
 
   -- only call this once
@@ -282,7 +310,6 @@ function train_model(X, Y, valid_X, valid_Y)
             sz = N - batch + 1
           end
           local X_batch = X:narrow(1, batch, sz)
-          --local X_cap_batch = X_cap:narrow(1, batch, sz)
           local Y_batch = Y:narrow(1, batch, sz)
 
           local func
@@ -375,6 +402,7 @@ function main()
 
    nclasses = f:read('nclasses'):all():long()[1]
    nfeatures = f:read('nfeatures'):all():long()[1]
+   vocab_size = f:read('vocab_size'):all():long()[1]
    start_word = 1
    end_word = 2
    start_tag = 8
@@ -387,29 +415,25 @@ function main()
 
      local timer = torch.Timer()
      local time = timer:time().real
-     -- predicted entities
-     local tot_pred_correct = 0
-     local tot_pred = 0
-     local tot_correct = 0
-     for i = 1, valid_X:size(1) do
-       local seq = viterbi(valid_X[i], transitions, emissions, nil)
-       local Y_seq = strip_padding(valid_Y[i], end_tag)
-
-       local pred_correct, pred, correct = score_seq(seq, Y_seq)
-       tot_pred_correct = tot_pred_correct + pred_correct
-       tot_pred = tot_pred + pred
-       tot_correct = tot_correct + correct
-     end
-
-     print('Viterbi time:', (timer:time().real - time) * 1000, 'ms')
-     local fscore = compute_fscore(tot_pred_correct, tot_pred, tot_correct)
+     local fscore = compute_eval_err(valid_X, valid_Y, transitions, emissions, nil)
+     print('Valid time:', (timer:time().real - time) * 1000, 'ms')
      print('Valid F-score:', fscore)
    elseif opt.classifier == 'memm' then
-     local model = train_model(X, Y, valid_X, valid_Y)
+     local model
+     if opt.action == 'train' then
+       -- context for training
+       local X_context, Y_context = get_context_features(X, Y)
+       local valid_X_context, valid_Y_context = get_context_features(valid_X, valid_Y)
+       model = train_model(X_context, Y_context, valid_X_context, valid_Y_context)
+     else
+       model = torch.load(opt.test_model).model
+     end
 
-     -- Viterbi sequence
-     local seq = viterbi(X, nil, nil, model)
-     local fscore = score_seq(seq, Y)
+     -- Viterbi
+     local timer = torch.Timer()
+     local time = timer:time().real
+     local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model)
+     print('Valid time:', (timer:time().real - time) * 1000, 'ms')
      print('Valid F-score:', fscore)
    elseif opt.classifier == 'perceptron' then
      -- a???
