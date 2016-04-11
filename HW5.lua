@@ -3,9 +3,6 @@ require("hdf5")
 require("nn")
 require("optim")
 
--- TODO: fix padding!!!!!
--- need to fix padding for viterbi, MEMM training
-
 cmd = torch.CmdLine()
 
 -- Cmd Args
@@ -20,29 +17,64 @@ cmd:option('-eta', 0.01, 'learning rate for SGD')
 cmd:option('-batch_size', 32, 'batch size for SGD')
 cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
 
+function get_context_features(X, Y)
+  -- Change a sequence X, Y to context features for MEMM
+  -- TODO: include more features
+  local N = X:size(1)
+  local X_context = torch.Tensor(N-1, 2) -- last class, word
+  for i = 2, N do
+    X_context[i-1] = torch.Tensor{X[i], Y[i-1] + vocab_size}
+  end
+
+  return X_context, Y:narrow(1, 2, N)
+end
+
+function strip_padding(X, pad)
+  pad = pad or end_word
+
+  -- handle padding
+  local N = 1
+  for i = 2, X:size(1) do
+    if X[i] == X[i-1] and X[i] == pad then
+      break
+    end
+    N = N + 1
+  end
+  return X:narrow(1, 1, N)
+end
+
 function get_hmm_probs(X, Y)
   local alpha = opt.alpha
 
   local N = X:size(1)
   local transitions = torch.Tensor(nclasses, nclasses):fill(alpha)
   local emissions = torch.Tensor(nfeatures, nclasses):fill(alpha)
-  for i = 1, N do
-    if i > 1 then
-      transitions[Y[i-1]][Y[i]] = transitions[Y[i-1]][Y[i]] + 1
+  for j = 1, N do
+    local seq = X[j]
+    local lbl = Y[j]
+    for i = 1, seq:size(1) do
+      if i > 1 then
+        if lbl[i] == lbl[i-1] and lbl[i] == end_tag then
+          -- end of sentence
+          break
+        end
+        transitions[lbl[i-1]][lbl[i]] = transitions[lbl[i-1]][lbl[i]] + 1
+      end
+      emissions[seq[i]][lbl[i]] = emissions[seq[i]][lbl[i]] + 1
     end
-    emissions[X[i]][Y[i]] = emissions[X[i]][Y[i]] + 1
   end
 
-  transitions:div(transitions:sum(2):expand(nclasses, nclasses))
+  transitions:cdiv(transitions:sum(2):expand(nclasses, nclasses))
   transitions:log()
-  emissions:div(emissions:sum(2):expand(nfeatures, nclasses))
+  emissions:cdiv(emissions:sum(2):expand(nfeatures, nclasses))
   emissions:log()
 
   return transitions, emissions
 end
 
 function viterbi(X, transitions, emissions, model)
-  -- use transition/emission probs or model
+  -- handle padding
+  X = strip_padding(X)
   local N = X:size(1)
   local pi = torch.Tensor(N, nclasses):fill(-math.huge)
   local bp = torch.zeros(N, nclasses):long()
@@ -51,24 +83,23 @@ function viterbi(X, transitions, emissions, model)
   if model then
     pi[1]:zero()
   elseif transitions then
-    for c = 1, nclasses do
-      pi[1][c] = emissions[X[1]][c]
-    end
+    pi[1] = emissions[X[1]]
   end
 
   for i = 2, N do
     for prev_c = 1, nclasses do
       local y_hat
       if model then
-        -- ????
-        -- y_hat = model:forward({X[i], prev_c})
-        pass
+        -- X in context format
+        y_hat = model:forward(X[i])
       elseif transitions then
         y_hat = emissions[X[i]] + transitions[prev_c]
       end
+      if prev_c == 8 then
+      end
       for c = 1, nclasses do
-        if pi[i-1][c] + y_hat[c] > pi[i][c] then
-          pi[i][c] = pi[i-1][c] + y_hat
+        if pi[i-1][prev_c] + y_hat[c] > pi[i][c] then
+          pi[i][c] = pi[i-1][prev_c] + y_hat[c]
           bp[i][c] = prev_c
         end
       end
@@ -77,6 +108,7 @@ function viterbi(X, transitions, emissions, model)
 
   -- trace backpointers
   local _, p = torch.max(pi[N], 1)
+  p = p[1]
   local seq = {}
   table.insert(seq, p)
   for i = N, 2, -1 do
@@ -111,6 +143,8 @@ function perceptron()
 end
 
 function compute_fscore(total_predicted_correct, total_predicted, total_correct, beta)
+  beta = beta or opt.beta
+
   local prec = total_predicted_correct / total_predicted
   local rec = total_predicted_correct / total_correct
   return (beta * beta + 1) * prec * rec / (beta * beta * prec + rec)
@@ -120,7 +154,7 @@ function score_seq(seq, Y)
   local N = seq:size(1)
   assert(Y:size(1) == N)
   local total_predicted_correct = seq:eq(Y):sum()
-  return compute_fscore(total_predicted_correct, N, N, opt.beta)
+  return total_predicted_correct
 end
 
 function model_eval(model, criterion, X, Y)
@@ -283,7 +317,7 @@ function main()
    local X = f:read('train_input'):all():long()
    local Y = f:read('train_output'):all():long()
    local valid_X = f:read('valid_input'):all():long()
-   local valid_Y = f:read('valid_output'):all()
+   local valid_Y = f:read('valid_output'):all():long()
    local test_X = f:read('test_input'):all():long()
    --local test_ids = f:read('test_ids'):all():long()
    -- Word embeddings from glove
@@ -292,12 +326,31 @@ function main()
 
    nclasses = f:read('nclasses'):all():long()[1]
    nfeatures = f:read('nfeatures'):all():long()[1]
+   start_word = 1
+   end_word = 2
+   start_tag = 8
+   end_tag = 9
 
    if opt.classifier == 'hmm' then
      local transitions, emissions = get_hmm_probs(X, Y)
+     print('Computed HMM probs')
 
-     local valid_seq = viterbi(valid_X, transitions, emissions, nil)
-     local fscore = score_seq(valid_seq, valid_Y)
+     local timer = torch.Timer()
+     local time = timer:time().real
+     local total_predicted_correct = 0
+     local total_predicted = 0
+     for i = 1, valid_X:size(1) do
+       local seq = viterbi(valid_X[i], transitions, emissions, nil)
+       local Y_seq = strip_padding(valid_Y[i], end_tag)
+
+       local seq_predicted_correct = score_seq(seq, Y_seq)
+       total_predicted_correct = total_predicted_correct + seq_predicted_correct
+       total_predicted = total_predicted + seq:size(1)
+     end
+
+     local total_correct = total_predicted
+     print('Viterbi time:', (timer:time().real - time) * 1000, 'ms')
+     local fscore = compute_fscore(total_predicted_correct, total_predicted, total_correct)
      print('Valid F-score:', fscore)
    elseif opt.classifier == 'memm' then
      local model = train_model(X, Y, valid_X, valid_Y)
