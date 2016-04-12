@@ -20,14 +20,12 @@ cmd:option('-eta', 0.01, 'learning rate for SGD')
 cmd:option('-batch_size', 32, 'batch size for SGD')
 cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
 
-function to_feats(c, x)
-  -- TODO: fix when more features come
+function to_feats(c, x, x_feats)
   -- batch size 1 for model compatibility
-  return torch.LongTensor{{x, c + vocab_size}}
+  return {torch.LongTensor{x}, torch.cat(torch.LongTensor{c + nfeatures}, x_feats, 1)}
 end
 
 function hash(feats)
-  -- TODO: account for more features?
   feats = feats:squeeze()
 
   local h = 0
@@ -40,28 +38,34 @@ function hash(feats)
   return h
 end
 
-function get_context_features(X, Y)
+function get_context_features(X, Y, X_feats)
   -- Change X, Y to context features for MEMM
-  -- TODO: include more features
-  local X_context = {} -- torch.Tensor(N-1, 2) -- x_i, c_{i-1}
+  local X_context = {} -- lexical words
+  local X_feats_context = {} -- feats
   local Y_context = {}
   for j = 1, X:size(1) do
-    local cur_X = X[j]
+    -- pad sentences TODO: fix this 
+    local cur_X = torch.cat(torch.LongTensor{start_word, start_word}, X[j], torch.LongTensor{end_word, end_word})
+    local cur_X_feats = X_feats[j]
     local cur_Y = Y[j]
     for i = 2, X:size(2) do
-      if cur_X[i] == end_word and cur_X[i] == cur_X[i-1] then break end
-      table.insert(X_context, {cur_X[i], cur_Y[i-1] + vocab_size})
+      if cur_X[i] == end_word and cur_X[i] == cur_X[i-1] then
+        break
+      end
+      table.insert(X_context, cur_X[i])
+      -- previous class, features
+      table.insert(X_feats_context, table.insert(torch.totable(cur_X_feats), cur_Y[i-1] + nfeatures))
       table.insert(Y_context, cur_Y[i])
     end
   end
   
-  return torch.LongTensor(X_context), torch.LongTensor(Y_context)
+  return torch.LongTensor(X_context), torch.LongTensor(Y_context), torch.LongTensor(X_feats_context)
 end
 
 function strip_padding(X, pad)
+  -- remove padding for a sentence
   pad = pad or end_word
 
-  -- handle padding
   local N = 1
   for i = 2, X:size(1) do
     if X[i] == X[i-1] and X[i] == pad then
@@ -169,6 +173,7 @@ function compute_fscore(total_predicted_correct, total_predicted, total_correct,
 end
 
 function get_mentions(seq)
+  -- Gets table of mentions from a sequence
   local N = seq:size(1)
   local seq_mentions = {}
 
@@ -195,6 +200,7 @@ function get_mentions(seq)
 end
 
 function score_seq(seq, Y)
+  -- compares pred vs gold sequence and output mention counts
   assert(Y:size(1) == seq:size(1))
   local pred_correct = 0
   local pred = 0
@@ -225,7 +231,7 @@ function score_seq(seq, Y)
 end
 
 function compute_eval_err(X, Y, transitions, emissions, model)
-   -- predicted entities
+   -- Compute F score of predicted mentions
    local tot_pred_correct = 0
    local tot_pred = 0
    local tot_correct = 0
@@ -245,7 +251,13 @@ function compute_eval_err(X, Y, transitions, emissions, model)
 
 function MEMM()
   local model = nn.Sequential()
-  model:add(nn.LookupTable(nfeatures + nclasses, nclasses))
+  local inputs = nn.ParallelTable()
+  local word_lookup = nn.LookupTable(nfeatures, nclasses)
+  local feats_lookup = nn.LookupTable(nclasses, nclasses) -- TODO: more features
+  inputs:add(word_lookup)
+  inputs:add(feats_lookup)
+  model:add(inputs)
+  model:add(nn.JoinTable(2))
   model:add(nn.Sum(2)) -- sum w_i*x_i
   model:add(nn.Add(nclasses)) -- bias
   model:add(nn.LogSoftMax())
@@ -264,7 +276,7 @@ function perceptron()
   return model
 end
 
-function model_eval(model, criterion, X, Y)
+function model_eval(model, criterion, X, Y, X_feats)
   -- batch eval
   model:evaluate()
   local N = X:size(1)
@@ -278,8 +290,9 @@ function model_eval(model, criterion, X, Y)
       end
       local X_batch = X:narrow(1, batch, sz)
       local Y_batch = Y:narrow(1, batch, sz)
+      local X_feats_batch = X_feats:narrow(1, batch, sz)
 
-      local inputs = X_batch
+      local inputs = {X_batch, X_feats_batch}
       local outputs = model:forward(inputs)
       local loss = criterion:forward(outputs, Y_batch)
 
@@ -355,7 +368,7 @@ function train_perceptron(X, Y, valid_X, valid_Y)
   return model, prev_loss
 end
 
-function train_model(X, Y, valid_X, valid_Y)
+function train_model(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
   local eta = opt.eta
   local batch_size = opt.batch_size
   local max_epochs = opt.max_epochs
@@ -384,16 +397,12 @@ function train_model(X, Y, valid_X, valid_Y)
       -- loop through each batch
       model:training()
       for batch = 1, N, batch_size do
-          --if ((batch - 1) / batch_size) % 1000 == 0 then
-            --print('Sample:', batch)
-            --print('Current train loss:', total_loss / batch)
-            --print('Current time:', 1000 * (timer:time().real - epoch_time), 'ms')
-          --end
           local sz = batch_size
           if batch + batch_size > N then
             sz = N - batch + 1
           end
           local X_batch = X:narrow(1, batch, sz)
+          local X_feats_batch = X_feats:narrow(1, batch, sz)
           local Y_batch = Y:narrow(1, batch, sz)
 
           -- closure to return err, df/dx
@@ -406,7 +415,7 @@ function train_model(X, Y, valid_X, valid_Y)
             grads:zero()
 
             -- forward
-            local inputs = X_batch
+            local inputs = {X_batch, X_feats_batch}
             local outputs = model:forward(inputs)
             local loss = criterion:forward(outputs, Y_batch)
 
@@ -424,7 +433,7 @@ function train_model(X, Y, valid_X, valid_Y)
       end
 
       print('Train loss:', total_loss / N)
-      local loss = model_eval(model, criterion, valid_X, valid_Y)
+      local loss = model_eval(model, criterion, valid_X, valid_Y, valid_X_feats)
       print('Valid loss:', loss)
 
       print('time for one epoch: ', (timer:time().real - epoch_time) * 1000, 'ms')
@@ -454,6 +463,10 @@ function main()
    -- Word embeddings from glove
    --local word_vecs = f:read('word_vecs'):all()
    --vec_size = word_vecs:size(2)
+   --
+   -- More features
+   local X_feats = f:read('train_features_input'):all():long()
+   local valid_X_feats = f:read('valid_features_input'):all():long()
 
    nclasses = f:read('nclasses'):all():long()[1]
    nfeatures = f:read('nfeatures'):all():long()[1]
@@ -462,6 +475,7 @@ function main()
    end_word = 2
    start_tag = 8
    end_tag = 9
+   window_size = 5 -- set for now
    tags = {'O', 'I-PER', 'I-LOC', 'I-ORG', 'I-MISC', 'B-MISC', 'B-LOC'}
 
    if opt.classifier == 'hmm' then
@@ -477,9 +491,9 @@ function main()
      local model
      if opt.action == 'train' then
        -- context for training
-       local X_context, Y_context = get_context_features(X, Y)
-       local valid_X_context, valid_Y_context = get_context_features(valid_X, valid_Y)
-       model = train_model(X_context, Y_context, valid_X_context, valid_Y_context)
+       local X_context, Y_context, X_feats_context = get_context_features(X, Y, X_feats)
+       local valid_X_context, valid_Y_context = get_context_features(valid_X, valid_Y, valid_X_feats)
+       model = train_model(X_context, Y_context, X_feats_context, valid_X_context, valid_Y_context, valid_X_feats_context)
      else
        model = torch.load(opt.test_model).model
      end
