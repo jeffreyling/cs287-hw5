@@ -20,6 +20,26 @@ cmd:option('-eta', 0.01, 'learning rate for SGD')
 cmd:option('-batch_size', 32, 'batch size for SGD')
 cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
 
+function to_feats(c, x)
+  -- TODO: fix when more features come
+  -- batch size 1 for model compatibility
+  return torch.LongTensor{{x, c + vocab_size}}
+end
+
+function hash(feats)
+  -- TODO: account for more features?
+  feats = feats:squeeze()
+
+  local h = 0
+  local b = 1
+  for i = 1, feats:size(1) do
+    h = h + feats[i] * b
+    b = b * (nfeatures + nclasses)
+  end
+
+  return h
+end
+
 function get_context_features(X, Y)
   -- Change X, Y to context features for MEMM
   -- TODO: include more features
@@ -100,9 +120,15 @@ function viterbi(X, transitions, emissions, model)
     for prev_c = 1, nclasses do
       local y_hat
       if model then
-        -- batch size 1 for model compatibility
-        y_hat = model:forward(torch.LongTensor{{X[i], prev_c + vocab_size}})
-        y_hat = y_hat:squeeze()
+        local feats = to_feats(prev_c, X[i])
+        local h = hash(feats)
+        if cache[h] then
+          y_hat = cache[h]
+        else
+          y_hat = model:forward(feats)
+          y_hat = y_hat:squeeze()
+          cache[h] = y_hat:clone()
+        end
       elseif transitions then
         y_hat = emissions[X[i]] + transitions[prev_c]
       end
@@ -229,8 +255,11 @@ end
 
 function perceptron()
   local model = nn.Sequential()
-  model:add(nn.LookupTable(nfeatures, nclasses))
-  -- no softmax or bias (?)
+  local lookup = nn.LookupTable(nfeatures + nclasses, nclasses)
+  lookup.weight:zero()
+  model:add(lookup)
+  model:add(nn.Sum(2))
+  -- no softmax or bias
 
   return model
 end
@@ -260,24 +289,79 @@ function model_eval(model, criterion, X, Y)
   return total_loss / N
 end
 
-function train_model(X, Y, valid_X, valid_Y)
-  local eta
-  if opt.classifier == 'memm' then
-    eta = opt.eta
-  elseif opt.classifier == 'perceptron' then
-    eta = 1
+function train_perceptron(X, Y, valid_X, valid_Y)
+  -- X, Y in sentence format
+  local max_epochs = opt.max_epochs
+  local N = X:size(1)
+
+  local model = perceptron()
+
+  -- shuffle for batches
+  local shuffle = torch.randperm(N):long()
+  X = X:index(1, shuffle)
+  Y = Y:index(1, shuffle)
+
+  local prev_loss = 1e10
+  local epoch = 1
+  local timer = torch.Timer()
+  while epoch <= max_epochs do
+      print('Epoch:', epoch)
+      local epoch_time = timer:time().real
+      local total_loss = 0
+
+      model:training()
+      model:zeroGradParameters()
+
+      -- do Viterbi on each input
+      for i = 1, X:size(1) do
+        local seq = viterbi(X[i], nil, nil, model)
+        local Y_seq = strip_padding(Y[i], end_tag)
+        assert(seq:size(1) == Y_seq:size(1))
+        for k = 2, seq:size(1) do
+          if seq[k] ~= Y_seq[k] then
+            -- do update where pred does not equal gold
+            model:zeroGradParameters()
+            local input = to_feats(seq[k-1], X[i][k])
+            local y_hat = model:forward(input)
+            local _,m = torch.max(y_hat, 1)
+            m = torch.min(m[1])
+
+            -- construct gradient
+            local g = torch.zeros(1, nclasses)
+            g[1][Y_seq[k]] = -1
+            g[1][m] = 1
+            model:backward(input, g)
+            model:updateParameters(1)
+          end
+        end
+      end
+
+      -- evaluate
+      local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model)
+      print('Valid F-score:', fscore)
+      local loss = 1 - fscore
+
+      print('time for one epoch: ', (timer:time().real - epoch_time) * 1000, 'ms')
+      print('')
+      if loss > prev_loss and epoch > 5 then
+        prev_loss = loss
+        break
+      end
+      prev_loss = loss
+      epoch = epoch + 1
+      torch.save(opt.model_out_name .. '_' .. opt.classifier .. '.t7', { model = model })
   end
+  print('Trained', epoch-1, 'epochs')
+  return model, prev_loss
+end
+
+function train_model(X, Y, valid_X, valid_Y)
+  local eta = opt.eta
   local batch_size = opt.batch_size
   local max_epochs = opt.max_epochs
   local N = X:size(1)
 
-  local model
-  if opt.classifier == 'memm' then
-    model = MEMM()
-  elseif opt.classifier == 'perceptron' then
-    model = perceptron()
-  end
-
+  local model = MEMM()
   local criterion = nn.ClassNLLCriterion()
 
   -- shuffle for batches
@@ -312,65 +396,36 @@ function train_model(X, Y, valid_X, valid_Y)
           local X_batch = X:narrow(1, batch, sz)
           local Y_batch = Y:narrow(1, batch, sz)
 
-          local func
-          if opt.classifier == 'memm' then
-            -- closure to return err, df/dx
-            func = function(x)
-              -- get new parameters
-              if x ~= params then
-                params:copy(x)
-              end
-              -- reset gradients
-              grads:zero()
-
-              -- forward
-              local inputs = X_batch
-              local outputs = model:forward(inputs)
-              local loss = criterion:forward(outputs, Y_batch)
-
-              -- track errors
-              total_loss = total_loss + loss * batch_size
-
-              -- compute gradients
-              local df_do = criterion:backward(outputs, Y_batch)
-              model:backward(inputs, df_do)
-
-              return loss, grads
+          -- closure to return err, df/dx
+          local func = function(x)
+            -- get new parameters
+            if x ~= params then
+              params:copy(x)
             end
-          elseif opt.classifier == 'perceptron' then
-            func = function(x)
-              -- get new parameters
-              if x ~= params then
-                params:copy(x)
-              end
-              -- reset gradients
-              grads:zero()
+            -- reset gradients
+            grads:zero()
 
-              -- forward
-              local inputs = X_batch
+            -- forward
+            local inputs = X_batch
+            local outputs = model:forward(inputs)
+            local loss = criterion:forward(outputs, Y_batch)
 
-              -- do Viterbi on each input with this model
-              -- diff each result with Y_batch (gold) to get grads
-              -- recompute (?) and then construct grads
-              -- backward
+            -- track errors
+            total_loss = total_loss + loss * batch_size
 
-              return loss, grads
-            end
+            -- compute gradients
+            local df_do = criterion:backward(outputs, Y_batch)
+            model:backward(inputs, df_do)
 
-            -- maybe manually sgd
+            return loss, grads
           end
 
           optim.sgd(func, params, state)
       end
 
       print('Train loss:', total_loss / N)
-
       local loss = model_eval(model, criterion, valid_X, valid_Y)
       print('Valid loss:', loss)
-      -- Viterbi sequence
-      --local seq = viterbi(X, nil, nil, model)
-      --local fscore = score_seq(seq, Y)
-      --print('Valid F-score:', fscore)
 
       print('time for one epoch: ', (timer:time().real - epoch_time) * 1000, 'ms')
       print('')
@@ -436,7 +491,7 @@ function main()
      print('Valid time:', (timer:time().real - time) * 1000, 'ms')
      print('Valid F-score:', fscore)
    elseif opt.classifier == 'perceptron' then
-     -- a???
+     local model = train_perceptron(X, Y, valid_X, valid_Y)
    end
 end
 
