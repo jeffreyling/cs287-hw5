@@ -46,13 +46,24 @@ def get_tag_ids(tag_dict):
     tag_to_id['</t>'] = END_TAG
     return tag_to_id
 
-def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, dataset, max_sent_len=0, test=False):
-    # Construct index feature sets for each file. One sentence per row
+def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, pos_tags, dataset, max_sent_len=0, test=False):
+    # Construct feature sets for each file. One sentence per row
     idx_features = []
     suffix_features = []
     prefix_features = []
+    pos_features = []
     lbl = []
     ids = []
+
+    # Load POS tags dictionary
+    id_to_pos = {}
+    with open(pos_tags, 'r') as f:
+        # Skip header
+        f.next()
+        for line in f:
+            line = line.strip()
+            global_id, tag = line.split(',')
+            id_to_pos[global_id] = tag
 
     sent = 0
     new_sent = True
@@ -65,6 +76,7 @@ def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id
                 idx_features[sent].extend([2] * (max_sent_len - cur_len))
                 suffix_features[sent].extend([2] * (max_sent_len - cur_len))
                 prefix_features[sent].extend([2] * (max_sent_len - cur_len))
+                pos_features[sent].extend([0] * (max_sent_len - cur_len))
                 ids[sent].extend([0] * (max_sent_len - cur_len))
                 if not test:
                     lbl[sent].extend([END_TAG] * (max_sent_len - cur_len))
@@ -76,6 +88,7 @@ def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id
                     idx_features.append([1])
                     suffix_features.append([1])
                     prefix_features.append([1])
+                    pos_features.append([0])
                     ids.append([0])
                     if not test:
                         lbl.append([START_TAG])
@@ -91,6 +104,7 @@ def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id
                 idx_features[sent].append(word_to_idx[word])
                 suffix_features[sent].append(suffix_to_idx[suffix])
                 prefix_features[sent].append(prefix_to_idx[prefix])
+                pos_features[sent].append(id_to_pos[global_id])
 
                 if not test:
                     assert len(line) == 4
@@ -98,12 +112,23 @@ def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id
                     tag = line[3]
                     lbl[sent].append(tag_to_id[tag])
 
+        # end padding for last line
+        if sent < len(idx_features):
+            cur_len = len(idx_features[sent])
+            idx_features[sent].extend([2] * (max_sent_len - cur_len))
+            suffix_features[sent].extend([2] * (max_sent_len - cur_len))
+            prefix_features[sent].extend([2] * (max_sent_len - cur_len))
+            pos_features[sent].extend([0] * (max_sent_len - cur_len))
+            ids[sent].extend([0] * (max_sent_len - cur_len))
+            if not test:
+                lbl[sent].extend([END_TAG] * (max_sent_len - cur_len))
+
     # Normalize lbl length
     # for i in range(len(lbl)):
         # if len(lbl[i]) < max_lbls:
             # lbl[i].extend([0] * (max_lbls - len(lbl[i])))
 
-    return np.array(idx_features, dtype=np.int32), np.array(suffix_features, dtype=np.int32), np.array(prefix_features, dtype=np.int32), np.array(lbl, dtype=np.int32), np.array(ids, dtype=np.int32)
+    return np.array(idx_features, dtype=np.int32), np.array(suffix_features, dtype=np.int32), np.array(prefix_features, dtype=np.int32), np.array(pos_features, dtype=np.int32), np.array(lbl, dtype=np.int32), np.array(ids, dtype=np.int32)
 
 def get_vocab(file_list, common_words_list, dataset=''):
     # Construct index feature dictionary.
@@ -161,6 +186,7 @@ FILE_PATHS = {"CONLL": ("data/train.num.txt",
                         "data/test.num.txt",
                         "data/tags.txt")}
 WORD_VECS_PATH = 'data/glove.6B.50d.txt'
+POS_TAGS_PATH = 'CONLL_pred.test'
 args = {}
 
 def main(arguments):
@@ -188,13 +214,13 @@ def main(arguments):
 
     # Convert data
     print 'Processing data...'
-    train_input, train_suffix_input, train_prefix_input, train_output, _ = convert_data(train, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, dataset, max_sent_len)
+    train_input, train_suffix_input, train_prefix_input, train_pos_input, train_output, _ = convert_data(train, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len)
 
     if valid:
-        valid_input, valid_suffix_input, valid_prefix_input, valid_output, _ = convert_data(valid, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, dataset, max_sent_len)
+        valid_input, valid_suffix_input, valid_prefix_input, valid_pos_input, valid_output, _ = convert_data(valid, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len)
 
     if test:
-        test_input, test_suffix_input, test_prefix_input, _, test_ids = convert_data(test, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, dataset, max_sent_len, test=True)
+        test_input, test_suffix_input, test_prefix_input, test_pos_input, _, test_ids = convert_data(test, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len, test=True)
 
     # +2 for start, end padding
     V = len(word_to_idx) + 2
@@ -218,14 +244,19 @@ def main(arguments):
         f['train_input'] = train_input
         f['train_suffix_input'] = train_suffix_input
         f['train_prefix_input'] = train_prefix_input
+        f['train_pos_input'] = train_pos_input
         f['train_output'] = train_output
         if valid:
             f['valid_input'] = valid_input
             f['valid_suffix_input' ] = valid_suffix_input
             f['valid_prefix_input'] = valid_prefix_input
+            f['valid_pos_input'] = valid_pos_input
             f['valid_output'] = valid_output
         if test:
             f['test_input'] = test_input
+            f['test_suffix_input'] = test_suffix_input
+            f['test_prefix_input'] = test_prefix_input
+            f['test_pos_input'] = test_pos_input
             f['test_ids'] = test_ids
         f['vocab_size'] = np.array([V], dtype=np.int32)
         f['nfeatures'] = np.array([V], dtype=np.int32) # TODO: change this with more features!
