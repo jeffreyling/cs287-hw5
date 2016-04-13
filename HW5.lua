@@ -20,46 +20,39 @@ cmd:option('-eta', 0.01, 'learning rate for SGD')
 cmd:option('-batch_size', 32, 'batch size for SGD')
 cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
 
-function to_feats(c, x, x_feats)
+function to_feats(c, x, x_feats, i)
+  local w = math.floor(window_size / 2)
+  local num_feat = x_feats:size(2)
+  local words
+  local feats
+
+  -- pad
+  x = torch.cat(x, torch.LongTensor(window_size):fill(end_word), 1)
+  x_feats = torch.cat(x_feats, torch.LongTensor(window_size, num_feat):fill(end_word), 1)
+
+  if i <= w then
+    words = torch.cat(torch.LongTensor(window_size - i):fill(start_word), x:narrow(1, 1, i), 1)
+    feats = torch.cat(torch.LongTensor((window_size - i)*num_feat):fill(start_word), x_feats:narrow(1, 1, i):view(i*num_feat), 1)
+  else
+    words = x:narrow(1, i-w, window_size)
+    feats = x_feats:narrow(1, i-w, window_size):view(window_size*num_feat)
+  end
   -- batch size 1 for model compatibility
-  return {torch.LongTensor{x}, torch.cat(torch.LongTensor{c + nfeatures}, x_feats, 1)}
+  words = words:view(1, words:size(1))
+  local all_feats = torch.cat(torch.LongTensor{c + nfeatures*window_size}, feats, 1)
+  all_feats = all_feats:view(1, all_feats:size(1))
+  return {words, all_feats}
 end
 
 function hash(feats)
-  feats = feats:squeeze()
-
-  local h = 0
-  local b = 1
-  for i = 1, feats:size(1) do
-    h = h + feats[i] * b
-    b = b * (nfeatures + nclasses)
-  end
-
-  return h
-end
-
-function get_context_features(X, Y, X_feats)
-  -- Change X, Y to context features for MEMM
-  local X_context = {} -- lexical words
-  local X_feats_context = {} -- feats
-  local Y_context = {}
-  for j = 1, X:size(1) do
-    -- pad sentences TODO: fix this 
-    local cur_X = torch.cat(torch.LongTensor{start_word, start_word}, X[j], torch.LongTensor{end_word, end_word})
-    local cur_X_feats = X_feats[j]
-    local cur_Y = Y[j]
-    for i = 2, X:size(2) do
-      if cur_X[i] == end_word and cur_X[i] == cur_X[i-1] then
-        break
-      end
-      table.insert(X_context, cur_X[i])
-      -- previous class, features
-      table.insert(X_feats_context, table.insert(torch.totable(cur_X_feats), cur_Y[i-1] + nfeatures))
-      table.insert(Y_context, cur_Y[i])
+  -- hash for viterbi speedup
+  local h = ''
+  for _,v in ipairs(feats) do
+    for i = 1, v[1]:size(1) do
+      h = h .. ',' .. v[1][i]
     end
   end
-  
-  return torch.LongTensor(X_context), torch.LongTensor(Y_context), torch.LongTensor(X_feats_context)
+  return h
 end
 
 function strip_padding(X, pad)
@@ -81,7 +74,7 @@ function get_hmm_probs(X, Y)
 
   local N = X:size(1)
   local transitions = torch.Tensor(nclasses, nclasses):fill(alpha)
-  local emissions = torch.Tensor(nfeatures, nclasses):fill(alpha)
+  local emissions = torch.Tensor(vocab_size, nclasses):fill(alpha)
   for j = 1, N do
     local seq = X[j]
     local lbl = Y[j]
@@ -99,19 +92,20 @@ function get_hmm_probs(X, Y)
 
   transitions:cdiv(transitions:sum(2):expand(nclasses, nclasses))
   transitions:log()
-  emissions:cdiv(emissions:sum(2):expand(nfeatures, nclasses))
+  emissions:cdiv(emissions:sum(2):expand(vocab_size, nclasses))
   emissions:log()
 
   return transitions, emissions
 end
 
-function viterbi(X, transitions, emissions, model)
+function viterbi(X, transitions, emissions, model, X_feats)
   -- handle padding
   X = strip_padding(X)
+  X_feats = X_feats:narrow(1, 1, X:size(1))
   local N = X:size(1)
   local pi = torch.Tensor(N, nclasses):fill(-math.huge)
   local bp = torch.zeros(N, nclasses):long()
-  local cache = {}
+  --local cache = {}
 
   -- initialize
   if model then
@@ -124,15 +118,15 @@ function viterbi(X, transitions, emissions, model)
     for prev_c = 1, nclasses do
       local y_hat
       if model then
-        local feats = to_feats(prev_c, X[i])
-        local h = hash(feats)
-        if cache[h] then
-          y_hat = cache[h]
-        else
+        local feats = to_feats(prev_c, X, X_feats, i)
+        --local h = hash(feats)
+        --if cache[h] then
+          --y_hat = cache[h]
+        --else
           y_hat = model:forward(feats)
           y_hat = y_hat:squeeze()
-          cache[h] = y_hat:clone()
-        end
+          --cache[h] = y_hat:clone()
+        --end
       elseif transitions then
         y_hat = emissions[X[i]] + transitions[prev_c]
       end
@@ -230,13 +224,18 @@ function score_seq(seq, Y)
   return pred_correct, pred, correct
 end
 
-function compute_eval_err(X, Y, transitions, emissions, model)
+function compute_eval_err(X, Y, transitions, emissions, model, X_feats)
    -- Compute F score of predicted mentions
    local tot_pred_correct = 0
    local tot_pred = 0
    local tot_correct = 0
    for i = 1, X:size(1) do
-     local seq = viterbi(X[i], transitions, emissions, model)
+     local seq
+     if model then
+       seq = viterbi(X[i], nil, nil, model, X_feats[i])
+     elseif transitions then
+       seq = viterbi(X[i], transitions, emissions, nil, nil)
+     end
      local Y_seq = strip_padding(Y[i], end_tag)
 
      local pred_correct, pred, correct = score_seq(seq, Y_seq)
@@ -252,8 +251,8 @@ function compute_eval_err(X, Y, transitions, emissions, model)
 function MEMM()
   local model = nn.Sequential()
   local inputs = nn.ParallelTable()
-  local word_lookup = nn.LookupTable(nfeatures, nclasses)
-  local feats_lookup = nn.LookupTable(nclasses, nclasses) -- TODO: more features
+  local word_lookup = nn.LookupTable(vocab_size * window_size, nclasses)
+  local feats_lookup = nn.LookupTable(nfeatures * window_size + nclasses, nclasses)
   inputs:add(word_lookup)
   inputs:add(feats_lookup)
   model:add(inputs)
@@ -468,6 +467,14 @@ function main()
    local X_feats = f:read('train_features_input'):all():long()
    local valid_X_feats = f:read('valid_features_input'):all():long()
 
+   -- window format for MEMM
+   local X_window = f:read('train_input_window'):all():long()
+   local X_feats_window = f:read('train_feats_input_window'):all():long()
+   local Y_window = f:read('train_output_window'):all():long()
+   local valid_X_window = f:read('valid_input_window'):all():long()
+   local valid_X_feats_window = f:read('valid_feats_input_window'):all():long()
+   local valid_Y_window = f:read('valid_output_window'):all():long()
+
    nclasses = f:read('nclasses'):all():long()[1]
    nfeatures = f:read('nfeatures'):all():long()[1]
    vocab_size = f:read('vocab_size'):all():long()[1]
@@ -476,7 +483,7 @@ function main()
    start_tag = 8
    end_tag = 9
    window_size = 5 -- set for now
-   tags = {'O', 'I-PER', 'I-LOC', 'I-ORG', 'I-MISC', 'B-MISC', 'B-LOC'}
+   --tags = {'O', 'I-PER', 'I-LOC', 'I-ORG', 'I-MISC', 'B-MISC', 'B-LOC'}
 
    if opt.classifier == 'hmm' then
      local transitions, emissions = get_hmm_probs(X, Y)
@@ -490,10 +497,7 @@ function main()
    elseif opt.classifier == 'memm' then
      local model
      if opt.action == 'train' then
-       -- context for training
-       local X_context, Y_context, X_feats_context = get_context_features(X, Y, X_feats)
-       local valid_X_context, valid_Y_context = get_context_features(valid_X, valid_Y, valid_X_feats)
-       model = train_model(X_context, Y_context, X_feats_context, valid_X_context, valid_Y_context, valid_X_feats_context)
+       model = train_model(X_window, Y_window, X_feats_window, valid_X_window, valid_Y_window, valid_X_feats_window)
      else
        model = torch.load(opt.test_model).model
      end
@@ -501,7 +505,7 @@ function main()
      -- Viterbi
      local timer = torch.Timer()
      local time = timer:time().real
-     local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model)
+     local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, X_feats)
      print('Valid time:', (timer:time().real - time) * 1000, 'ms')
      print('Valid F-score:', fscore)
    elseif opt.classifier == 'perceptron' then

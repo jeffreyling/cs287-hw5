@@ -127,12 +127,12 @@ def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id
 def get_vocab(file_list, common_words_list, dataset=''):
     # Construct index feature dictionary.
     word_to_idx = {'<s>': 1, '</s>': 2}
-    suffix_to_idx = {}
-    prefix_to_idx = {}
+    suffix_to_idx = {'<s>': 1, '</s>': 2}
+    prefix_to_idx = {'<s>': 1, '</s>': 2}
     # Start at 3 (1, 2 is start/end of sentence)
     idx = 3
-    suffix_idx = 1
-    prefix_idx = 1
+    suffix_idx = 3
+    prefix_idx = 3
     max_sent_len = 0
     for filename in file_list:
         if filename:
@@ -159,7 +159,6 @@ def get_vocab(file_list, common_words_list, dataset=''):
                         prefix_idx += 1
 
     max_sent_len += 2 # For start and end padding
-    word_to_idx['UNK'] = len(word_to_idx) + 1
 
     return word_to_idx, suffix_to_idx, prefix_to_idx, max_sent_len
 
@@ -186,10 +185,17 @@ def merge_feats(feat_list, feat_lengths):
 
     return np.swapaxes(np.swapaxes(np.array(merged_feats), 0,1), 1,2)
 
-def window_format(X, X_feats, Y):
+def shift_window(X, num_feats, multifeat=False):
+    """ Shifts indices so that each position in a window has different features """
+    if multifeat:
+        return [[el + i*num_feats for el in x] for i,x in enumerate(X)]
+    else:
+        return [x + i*num_feats for i,x in enumerate(X)]
+
+def window_format(X, X_feats, Y, V, nfeatures):
     """ Transform sentence format X, Y to window format for MEMM """
     N = len(X)
-    num_feats = len(X_feats[0])
+    num_feats = len(X_feats[0][0])
     window_size = 5 # fix for now
     w = window_size / 2
 
@@ -199,24 +205,28 @@ def window_format(X, X_feats, Y):
     for i in xrange(N):
         # Add padding
         cur_X = [START_WORD]*w + X[i] + [END_WORD]*w
-        cur_X_feats = [[START_WORD]*w]*num_feats + X_feats[i] + [[END_WORD]*w]*num_feats
-        # print(cur_X)
-        # print(cur_X_feats)
-        # print(type(cur_X_feats))
-        # raw_input()
-        if Y:
-            cur_Y = [START_TAG]*w + Y[i] + [END_TAG]*w
+        cur_X_feats = [[START_WORD]*num_feats]*w + X_feats[i] + [[END_WORD]*num_feats]*w
+        cur_Y = [START_TAG]*w + Y[i] + [END_TAG]*w
         for j in xrange(w, len(cur_X) - w):
             if cur_X[j] == cur_X[j-1] and cur_X[j] == END_WORD:
                 break
-            X_window.append(cur_X[j-w : j+w+1])
-            X_feats_window.append([el for feats in cur_X_feats[j-w : j+w+1] for el in feats]) # flatten feats
-            if len(X_feats_window[-1]) != 10:
-                print cur_X_feats
-            if Y:
-                Y_window.append(cur_Y[j])
+            x = shift_window(cur_X[j-w : j+w+1], V)
+            X_window.append(x)
+            xf = shift_window(cur_X_feats[j-w : j+w+1], nfeatures, multifeat=True)
+            xf = [el for feats in xf for el in feats] # flatten feats
+            X_feats_window.append(xf)
+            Y_window.append(cur_Y[j])
 
-    return np.array(X_window, dtype=np.int32), np.array(X_feats_window, dtype=np.int32), np.array(Y_window, dtype=np.int32)
+    X_window = np.array(X_window, dtype=np.int32)
+    X_feats_window = np.array(X_feats_window, dtype=np.int32)
+    Y_window = np.array(Y_window, dtype=np.int32)
+
+    # Add previous class to features
+    new_col = np.hstack(([START_TAG], Y_window[:-1])).reshape(Y_window.shape[0], 1)
+    new_col = np.add(new_col, nfeatures*window_size)
+    X_feats_window = np.concatenate((X_feats_window, new_col), axis=1)
+
+    return X_window, X_feats_window, Y_window
 
 
 FILE_PATHS = {"CONLL": ("data/train.num.txt",
@@ -262,20 +272,20 @@ def main(arguments):
     print 'Processing data...'
     train_input, train_suffix_input, train_prefix_input, train_pos_input, train_output, _ = convert_data(train, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len)
     train_feats_input = merge_feats([train_suffix_input, train_prefix_input], feat_lengths)
-    print train_feats_input.shape
 
-    train_input_window, train_feats_input_window, train_output_window = window_format(train_input.tolist(), train_feats_input.tolist(), train_output.tolist())
-    print train_input_window.shape, train_feats_input_window.shape, train_output_window.shape
+    # To windows
+    train_input_window, train_feats_input_window, train_output_window = window_format(train_input.tolist(), train_feats_input.tolist(), train_output.tolist(), V, nfeatures)
 
     if valid:
         valid_input, valid_suffix_input, valid_prefix_input, valid_pos_input, valid_output, _ = convert_data(valid, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len)
         valid_feats_input = merge_feats([valid_suffix_input, valid_prefix_input], feat_lengths)
-        valid_input_window, valid_feats_input_window, valid_output_window = window_format(valid_input.tolist(), valid_feats_input.tolist(), valid_output.tolist())
+
+        # To windows
+        valid_input_window, valid_feats_input_window, valid_output_window = window_format(valid_input.tolist(), valid_feats_input.tolist(), valid_output.tolist(), V, nfeatures)
 
     if test:
         test_input, test_suffix_input, test_prefix_input, test_pos_input, _, test_ids = convert_data(test, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len, test=True)
         test_feats_input = merge_feats([test_suffix_input, test_prefix_input], feat_lengths)
-        test_input_window, test_feats_input_window, _ = window_format(test_input.tolist(), test_feats_input.tolist(), None)
 
 
     # Get word vecs
@@ -288,22 +298,27 @@ def main(arguments):
     for word, vec in word_vecs.items():
         embed[word_to_idx[word] - 1] = vec
 
+    print train_input.shape, train_feats_input.shape, train_output.shape, train_input_window.shape, train_feats_input_window.shape
+    print train_input_window, train_feats_input_window
     print 'Saving...'
     filename = args.dataset + '.hdf5'
     with h5py.File(filename, "w") as f:
         f['train_input'] = train_input
-        f['train_feats_input'] = train_feats_input
-        # f['train_pos_input'] = train_pos_input
+        f['train_features_input'] = train_feats_input
         f['train_output'] = train_output
+        f['train_input_window'] = train_input_window
+        f['train_feats_input_window'] = train_feats_input_window
+        f['train_output_window'] = train_output_window
         if valid:
             f['valid_input'] = valid_input
-            f['valid_feats_input'] = valid_feats_input
-            # f['valid_pos_input'] = valid_pos_input
+            f['valid_features_input'] = valid_feats_input
             f['valid_output'] = valid_output
+            f['valid_input_window'] = valid_input_window
+            f['valid_feats_input_window'] = valid_feats_input_window
+            f['valid_output_window'] = valid_output_window
         if test:
             f['test_input'] = test_input
-            f['test_feats_input'] = test_feats_input
-            # f['test_pos_input'] = test_pos_input
+            f['test_features_input'] = test_feats_input
             f['test_ids'] = test_ids
         f['vocab_size'] = np.array([V], dtype=np.int32)
         f['nfeatures'] = np.array([nfeatures], dtype=np.int32)
