@@ -47,17 +47,18 @@ def get_tag_ids(tag_dict):
 
 def word_to_feats(word, common_words_list, features_to_idx=None):
     new_feats = []
-    if word.islower():
-        new_feats.append('CAP:LOWER')
-    elif word.isupper():
-        new_feats.append('CAP:UPPER')
-    elif word[0].isupper():
-        new_feats.append('CAP:FIRST')
-    elif any(let.isupper() for let in word):
-        new_feats.append('CAP:HAS')
-    else:
-        new_feats.append('CAP:NONE')
-    new_feats.extend(['SUFF:' + word[-2:], 'PREF:' + word[:2]])
+    # if word.islower():
+        # new_feats.append('CAP:LOWER')
+    # elif word.isupper():
+        # new_feats.append('CAP:UPPER')
+    # elif word[0].isupper():
+        # new_feats.append('CAP:FIRST')
+    # elif any(let.isupper() for let in word):
+        # new_feats.append('CAP:HAS')
+    # else:
+        # new_feats.append('CAP:NONE')
+    new_feats.append('SUFF:' + word[-2:])
+    new_feats.append('PREF:' + word[:2])
     word = clean_str(word, common_words_list)
 
     # pos_features[sent].append(id_to_pos[global_id])
@@ -75,14 +76,14 @@ def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, common_word
     ids = []
 
     # Load POS tags dictionary
-    id_to_pos = {}
-    with open(pos_tags, 'r') as f:
-        # Skip header
-        f.next()
-        for line in f:
-            line = line.strip()
-            global_id, tag = line.split(',')
-            id_to_pos[global_id] = tag
+    # id_to_pos = {}
+    # with open(pos_tags, 'r') as f:
+        # # Skip header
+        # f.next()
+        # for line in f:
+            # line = line.strip()
+            # global_id, tag = line.split(',')
+            # id_to_pos[global_id] = tag
 
     sent = 0
     new_sent = True
@@ -203,7 +204,7 @@ def window_format(X, X_feats, Y, V, nfeatures):
     """ Transform sentence format X, Y to window format for MEMM """
     N = len(X)
     num_feats = len(X_feats[0][0])
-    window_size = 3 # fix for now
+    window_size = 5 # fix for now
     w = window_size / 2
 
     X_window = []
@@ -268,6 +269,9 @@ def main(arguments):
     # Get index features
     print 'Getting vocab...'
     word_to_idx, features_to_idx, max_sent_len = get_vocab([train, valid, test], common_words_list, dataset)
+    with open('vocab_list.txt', 'w') as f:
+        for k,v in word_to_idx.items():
+            f.write("%s\t%d\n" % (k,v))
 
     V = len(word_to_idx)
     print('Vocab size:', V)
@@ -276,8 +280,8 @@ def main(arguments):
 
     C = len(tag_to_id)
 
-    # Number of feature classes (cap, prefix2, suffix2) for now
-    num_feats = 3
+    # Number of feature classes (prefix2, suffix2) for now
+    num_feats = 2
 
     # Convert data
     print 'Processing data...'
