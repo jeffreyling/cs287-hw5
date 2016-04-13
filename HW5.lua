@@ -464,8 +464,8 @@ function main()
    --vec_size = word_vecs:size(2)
    --
    -- More features
-   local X_feats = f:read('train_features_input'):all():long()
-   local valid_X_feats = f:read('valid_features_input'):all():long()
+   local X_feats = f:read('train_feats_input'):all():long()
+   local valid_X_feats = f:read('valid_feats_input'):all():long()
 
    -- window format for MEMM
    local X_window = f:read('train_input_window'):all():long()

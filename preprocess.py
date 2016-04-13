@@ -244,6 +244,8 @@ def main(arguments):
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('dataset', help="Data set",
                         type=str)
+    parser.add_argument('features', help="Features to use",
+                        type=str, nargs="*", default=["prefix", "suffix"])
     args = parser.parse_args(arguments)
     dataset = args.dataset
     train, valid, test, tag_dict = FILE_PATHS[dataset]
@@ -264,28 +266,55 @@ def main(arguments):
     print('Vocab size:', V)
 
     C = len(tag_to_id)
-    feat_lengths = [len(suffix_to_idx), len(prefix_to_idx)]
-    nfeatures = sum(feat_lengths)
-    print('Num features:', nfeatures)
+    feat_lengths = []
 
     # Convert data
     print 'Processing data...'
     train_input, train_suffix_input, train_prefix_input, train_pos_input, train_output, _ = convert_data(train, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len)
-    train_feats_input = merge_feats([train_suffix_input, train_prefix_input], feat_lengths)
+    train_feat_list = []
+    if 'prefix' in args.features:
+        train_feat_list.append(train_prefix_input)
+        feat_lengths.append(len(prefix_to_idx))
+    if 'suffix' in args.features:
+        train_feat_list.append(train_suffix_input)
+        feat_lengths.append(len(suffix_to_idx))
+    if 'pos' in args.features:
+        train_feat_list.append(train_pos_input)
+        feat_lengths.append(45)
+
+    nfeatures = sum(feat_lengths)
+    print('Num features:', nfeatures)
+
+    # Merge features and create windows
+    train_feats_input = merge_feats(train_feat_list, feat_lengths)
 
     # To windows
     train_input_window, train_feats_input_window, train_output_window = window_format(train_input.tolist(), train_feats_input.tolist(), train_output.tolist(), V, nfeatures)
 
     if valid:
         valid_input, valid_suffix_input, valid_prefix_input, valid_pos_input, valid_output, _ = convert_data(valid, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len)
-        valid_feats_input = merge_feats([valid_suffix_input, valid_prefix_input], feat_lengths)
+        valid_feat_list = []
+        if 'prefix' in args.features:
+            valid_feat_list.append(valid_prefix_input)
+        if 'suffix' in args.features:
+            valid_feat_list.append(valid_suffix_input)
+        if 'pos' in args.features:
+            valid_feat_list.append(valid_pos_input)
 
-        # To windows
+        valid_feats_input = merge_feats(valid_feat_list, feat_lengths)
         valid_input_window, valid_feats_input_window, valid_output_window = window_format(valid_input.tolist(), valid_feats_input.tolist(), valid_output.tolist(), V, nfeatures)
 
     if test:
         test_input, test_suffix_input, test_prefix_input, test_pos_input, _, test_ids = convert_data(test, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len, test=True)
-        test_feats_input = merge_feats([test_suffix_input, test_prefix_input], feat_lengths)
+        test_feat_list = []
+        if 'prefix' in args.features:
+            test_feat_list.append(test_prefix_input)
+        if 'suffix' in args.features:
+            test_feat_list.append(test_suffix_input)
+        if 'pos' in args.features:
+            test_feat_list.append(test_pos_input)
+
+        test_feats_input = merge_feats(test_feat_list, feat_lengths)
 
 
     # Get word vecs
@@ -321,7 +350,7 @@ def main(arguments):
             f['test_features_input'] = test_feats_input
             f['test_ids'] = test_ids
         f['vocab_size'] = np.array([V], dtype=np.int32)
-        f['nfeatures'] = np.array([nfeatures], dtype=np.int32)
+        f['nfeatures'] = np.array([V + nfeatures], dtype=np.int32)
         f['nclasses'] = np.array([C], dtype=np.int32)
 
         f['word_vecs'] = embed
