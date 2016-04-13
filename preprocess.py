@@ -45,12 +45,32 @@ def get_tag_ids(tag_dict):
     tag_to_id['</t>'] = END_TAG
     return tag_to_id
 
-def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, pos_tags, dataset, max_sent_len=0, test=False):
+def word_to_feats(word, common_words_list, features_to_idx=None):
+    new_feats = []
+    if word.islower():
+        new_feats.append('CAP:LOWER')
+    elif word.isupper():
+        new_feats.append('CAP:UPPER')
+    elif word[0].isupper():
+        new_feats.append('CAP:FIRST')
+    elif any(let.isupper() for let in word):
+        new_feats.append('CAP:HAS')
+    else:
+        new_feats.append('CAP:NONE')
+    word = clean_str(word, common_words_list)
+
+    new_feats.extend(['SUFF:' + word[-2:], 'PREF:' + word[:2]])
+    # pos_features[sent].append(id_to_pos[global_id])
+
+    if features_to_idx:
+        return [features_to_idx[feat] for feat in new_feats], word
+    else:
+        return new_feats, word
+
+def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, common_words_list, pos_tags, dataset, max_sent_len=0, num_feats=0, test=False):
     # Construct feature sets for each file. One sentence per row
     idx_features = []
-    suffix_features = []
-    prefix_features = []
-    pos_features = []
+    all_features = []
     lbl = []
     ids = []
 
@@ -73,9 +93,7 @@ def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id
                 # end padding
                 cur_len = len(idx_features[sent])
                 idx_features[sent].extend([2] * (max_sent_len - cur_len))
-                suffix_features[sent].extend([2] * (max_sent_len - cur_len))
-                prefix_features[sent].extend([2] * (max_sent_len - cur_len))
-                pos_features[sent].extend([0] * (max_sent_len - cur_len))
+                all_features[sent].extend([[2] * num_feats] * (max_sent_len - cur_len))
                 ids[sent].extend([0] * (max_sent_len - cur_len))
                 if not test:
                     lbl[sent].extend([END_TAG] * (max_sent_len - cur_len))
@@ -85,9 +103,7 @@ def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id
                 if new_sent:
                     # initial padding
                     idx_features.append([1])
-                    suffix_features.append([1])
-                    prefix_features.append([1])
-                    pos_features.append([0])
+                    all_features.append([[1]*num_feats])
                     ids.append([0])
                     if not test:
                         lbl.append([START_TAG])
@@ -97,13 +113,10 @@ def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id
                 ids[sent].append(global_id)
 
                 # X
-                word = clean_str(line[2], common_words_list)
-                suffix = word[-2:]
-                prefix = word[:2]
+                word = line[2]
+                new_feats, word = word_to_feats(word, common_words_list, features_to_idx)
                 idx_features[sent].append(word_to_idx[word])
-                suffix_features[sent].append(suffix_to_idx[suffix])
-                prefix_features[sent].append(prefix_to_idx[prefix])
-                pos_features[sent].append(id_to_pos[global_id])
+                all_features[sent].append(new_feats)
 
                 if not test:
                     assert len(line) == 4
@@ -115,24 +128,20 @@ def convert_data(data_name, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id
         if sent < len(idx_features):
             cur_len = len(idx_features[sent])
             idx_features[sent].extend([2] * (max_sent_len - cur_len))
-            suffix_features[sent].extend([2] * (max_sent_len - cur_len))
-            prefix_features[sent].extend([2] * (max_sent_len - cur_len))
-            pos_features[sent].extend([0] * (max_sent_len - cur_len))
+            all_features[sent].extend([[2]*num_feats] * (max_sent_len - cur_len))
             ids[sent].extend([0] * (max_sent_len - cur_len))
             if not test:
                 lbl[sent].extend([END_TAG] * (max_sent_len - cur_len))
 
-    return np.array(idx_features, dtype=np.int32), np.array(suffix_features, dtype=np.int32), np.array(prefix_features, dtype=np.int32), np.array(pos_features, dtype=np.int32), np.array(lbl, dtype=np.int32), np.array(ids, dtype=np.int32)
+    return np.array(idx_features, dtype=np.int32), np.array(all_features, dtype=np.int32), np.array(lbl, dtype=np.int32), np.array(ids, dtype=np.int32)
 
 def get_vocab(file_list, common_words_list, dataset=''):
     # Construct index feature dictionary.
     word_to_idx = {'<s>': 1, '</s>': 2}
-    suffix_to_idx = {'<s>': 1, '</s>': 2}
-    prefix_to_idx = {'<s>': 1, '</s>': 2}
+    features_to_idx = {'<s>': 1, '</s>': 2}
     # Start at 3 (1, 2 is start/end of sentence)
     idx = 3
-    suffix_idx = 3
-    prefix_idx = 3
+    feat_idx = 3
     max_sent_len = 0
     for filename in file_list:
         if filename:
@@ -144,23 +153,21 @@ def get_vocab(file_list, common_words_list, dataset=''):
                         max_sent_len = max(max_sent_len, sent_len)
                         sent_len = 0
                         continue
-                    word = clean_str(line.split()[2], common_words_list)
                     sent_len += 1
-                    suffix = word[-2:]
-                    prefix = word[:2]
+                    # Add new features
+                    word = line.split()[2]
+                    new_feats, word = word_to_feats(word, common_words_list)
                     if word not in word_to_idx:
                         word_to_idx[word] = idx
                         idx += 1
-                    if suffix not in suffix_to_idx:
-                        suffix_to_idx[suffix] = suffix_idx
-                        suffix_idx += 1
-                    if prefix not in prefix_to_idx:
-                        prefix_to_idx[prefix] = prefix_idx
-                        prefix_idx += 1
+                    for feat in new_feats:
+                        if feat not in features_to_idx:
+                            features_to_idx[feat] = feat_idx
+                            feat_idx += 1
 
     max_sent_len += 2 # For start and end padding
 
-    return word_to_idx, suffix_to_idx, prefix_to_idx, max_sent_len
+    return word_to_idx, features_to_idx, max_sent_len
 
 def load_word_vecs(file_name, vocab):
     # Get word vecs from glove
@@ -203,7 +210,7 @@ def window_format(X, X_feats, Y, V, nfeatures):
     X_feats_window = []
     Y_window = []
     for i in xrange(N):
-        # Add padding
+        # Add padding to sentence
         cur_X = [START_WORD]*w + X[i] + [END_WORD]*w
         cur_X_feats = [[START_WORD]*num_feats]*w + X_feats[i] + [[END_WORD]*num_feats]*w
         cur_Y = [START_TAG]*w + Y[i] + [END_TAG]*w
@@ -211,9 +218,9 @@ def window_format(X, X_feats, Y, V, nfeatures):
             if cur_X[j] == cur_X[j-1] and cur_X[j] == END_WORD:
                 break
             x = shift_window(cur_X[j-w : j+w+1], V)
-            X_window.append(x)
             xf = shift_window(cur_X_feats[j-w : j+w+1], nfeatures, multifeat=True)
             xf = [el for feats in xf for el in feats] # flatten feats
+            X_window.append(x)
             X_feats_window.append(xf)
             Y_window.append(cur_Y[j])
 
@@ -260,70 +267,68 @@ def main(arguments):
 
     # Get index features
     print 'Getting vocab...'
-    word_to_idx, suffix_to_idx, prefix_to_idx, max_sent_len = get_vocab([train, valid, test], common_words_list, dataset)
+    word_to_idx, features_to_idx, max_sent_len = get_vocab([train, valid, test], common_words_list, dataset)
 
     V = len(word_to_idx)
     print('Vocab size:', V)
+    nfeatures = len(features_to_idx)
+    print('Num features:', nfeatures)
 
     C = len(tag_to_id)
-    feat_lengths = []
+
+    # Number of feature classes (cap, prefix2, suffix2) for now
+    num_feats = 3
 
     # Convert data
     print 'Processing data...'
-    train_input, train_suffix_input, train_prefix_input, train_pos_input, train_output, _ = convert_data(train, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len)
-    train_feat_list = []
-    if 'prefix' in args.features:
-        train_feat_list.append(train_prefix_input)
-        feat_lengths.append(len(prefix_to_idx))
-    if 'suffix' in args.features:
-        train_feat_list.append(train_suffix_input)
-        feat_lengths.append(len(suffix_to_idx))
-    if 'pos' in args.features:
-        train_feat_list.append(train_pos_input)
-        feat_lengths.append(45)
-
-    nfeatures = sum(feat_lengths)
-    print('Num features:', nfeatures)
+    train_input, train_feats_input, train_output, _ = convert_data(train, word_to_idx, features_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len, num_feats)
+    # train_feat_list = []
+    # if 'prefix' in args.features:
+        # train_feat_list.append(train_prefix_input)
+        # feat_lengths.append(len(prefix_to_idx))
+    # if 'suffix' in args.features:
+        # train_feat_list.append(train_suffix_input)
+        # feat_lengths.append(len(suffix_to_idx))
+    # if 'pos' in args.features:
+        # train_feat_list.append(train_pos_input)
+        # feat_lengths.append(45)
 
     # Merge features and create windows
-    train_feats_input = merge_feats(train_feat_list, feat_lengths)
+    # train_feats_input = merge_feats(train_feat_list, feat_lengths)
 
     # To windows
     train_input_window, train_feats_input_window, train_output_window = window_format(train_input.tolist(), train_feats_input.tolist(), train_output.tolist(), V, nfeatures)
 
     if valid:
-        valid_input, valid_suffix_input, valid_prefix_input, valid_pos_input, valid_output, _ = convert_data(valid, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len)
-        valid_feat_list = []
-        if 'prefix' in args.features:
-            valid_feat_list.append(valid_prefix_input)
-        if 'suffix' in args.features:
-            valid_feat_list.append(valid_suffix_input)
-        if 'pos' in args.features:
-            valid_feat_list.append(valid_pos_input)
+        valid_input, valid_feats_input, valid_output, _ = convert_data(valid, word_to_idx, features_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len, num_feats)
+        # valid_feat_list = []
+        # if 'prefix' in args.features:
+            # valid_feat_list.append(valid_prefix_input)
+        # if 'suffix' in args.features:
+            # valid_feat_list.append(valid_suffix_input)
+        # if 'pos' in args.features:
+            # valid_feat_list.append(valid_pos_input)
 
-        valid_feats_input = merge_feats(valid_feat_list, feat_lengths)
+        # valid_feats_input = merge_feats(valid_feat_list, feat_lengths)
         valid_input_window, valid_feats_input_window, valid_output_window = window_format(valid_input.tolist(), valid_feats_input.tolist(), valid_output.tolist(), V, nfeatures)
 
     if test:
-        test_input, test_suffix_input, test_prefix_input, test_pos_input, _, test_ids = convert_data(test, word_to_idx, suffix_to_idx, prefix_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len, test=True)
-        test_feat_list = []
-        if 'prefix' in args.features:
-            test_feat_list.append(test_prefix_input)
-        if 'suffix' in args.features:
-            test_feat_list.append(test_suffix_input)
-        if 'pos' in args.features:
-            test_feat_list.append(test_pos_input)
+        test_input, test_feats_input, _, test_ids = convert_data(test, word_to_idx, features_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len, num_feats, test=True)
+        # test_feat_list = []
+        # if 'prefix' in args.features:
+            # test_feat_list.append(test_prefix_input)
+        # if 'suffix' in args.features:
+            # test_feat_list.append(test_suffix_input)
+        # if 'pos' in args.features:
+            # test_feat_list.append(test_pos_input)
 
-        test_feats_input = merge_feats(test_feat_list, feat_lengths)
+        # test_feats_input = merge_feats(test_feat_list, feat_lengths)
 
 
     # Get word vecs
     print 'Getting word vecs...'
     word_vecs = load_word_vecs(WORD_VECS_PATH, word_to_idx)
     embed = np.random.uniform(-0.25, 0.25, (V, len(word_vecs.values()[0])))
-    # zero out padding
-    # embed[0] = 0
-    # embed[1] = 0
     for word, vec in word_vecs.items():
         embed[word_to_idx[word] - 1] = vec
 
