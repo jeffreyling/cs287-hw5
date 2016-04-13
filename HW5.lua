@@ -11,6 +11,7 @@ cmd:option('-classifier', 'hmm', 'classifier to use: hmm, memm, perceptron')
 cmd:option('-model_out_name', 'train', 'output file name of model')
 cmd:option('-action', 'train', 'train or test')
 cmd:option('-test_model', '', 'model to test on')
+cmd:option('-warm_start_model', '', 'model to restart training')
 
 -- Hyperparameters
 cmd:option('-alpha', 0.01, 'smoothing alpha')
@@ -20,26 +21,10 @@ cmd:option('-eta', 0.01, 'learning rate for SGD')
 cmd:option('-batch_size', 32, 'batch size for SGD')
 cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
 
-function to_feats(c, x, x_feats, i)
-  local w = math.floor(window_size / 2)
-  local num_feat = x_feats:size(2)
-  local words
-  local feats
-
-  -- pad
-  x = torch.cat(x, torch.LongTensor(window_size):fill(end_word), 1)
-  x_feats = torch.cat(x_feats, torch.LongTensor(window_size, num_feat):fill(end_word), 1)
-
-  if i <= w then
-    words = torch.cat(torch.LongTensor(window_size - i):fill(start_word), x:narrow(1, 1, i), 1)
-    feats = torch.cat(torch.LongTensor((window_size - i)*num_feat):fill(start_word), x_feats:narrow(1, 1, i):view(i*num_feat), 1)
-  else
-    words = x:narrow(1, i-w, window_size)
-    feats = x_feats:narrow(1, i-w, window_size):view(window_size*num_feat)
-  end
+function to_feats(c, x, x_feats)
   -- batch size 1 for model compatibility
-  words = words:view(1, words:size(1))
-  local all_feats = torch.cat(torch.LongTensor{c + nfeatures*window_size}, feats, 1)
+  local words = x:view(1, x:size(1))
+  local all_feats = torch.cat(torch.LongTensor{c + nfeatures*window_size}, x_feats, 1)
   all_feats = all_feats:view(1, all_feats:size(1))
   return {words, all_feats}
 end
@@ -98,6 +83,33 @@ function get_hmm_probs(X, Y)
   return transitions, emissions
 end
 
+function init_window(X)
+  local w = math.floor(window_size / 2)
+  local pad_X = torch.cat(torch.LongTensor(w):fill(start_word), X, 1)
+  pad_X = torch.cat(pad_X, torch.LongTensor(w):fill(end_word), 1)
+
+  local X_window = torch.LongTensor(X:size(1), window_size)
+  for i = 1, X:size(1) do
+    X_window[i] = pad_X:narrow(1, i, window_size)
+  end
+
+  return X_window
+end
+
+function init_window_feats(X)
+  local w = math.floor(window_size / 2)
+  local num_feats = X:size(2)
+  local pad_X = torch.cat(torch.LongTensor(w, num_feats):fill(start_word), X, 1)
+  pad_X = torch.cat(pad_X, torch.LongTensor(w, num_feats):fill(end_word), 1)
+
+  local X_window = torch.LongTensor(X:size(1), num_feats * window_size)
+  for i = 1, X:size(1) do
+    X_window[i] = pad_X:narrow(1, i, window_size):view(num_feats * window_size)
+  end
+
+  return X_window
+end
+
 function viterbi(X, transitions, emissions, model, X_feats)
   -- handle padding
   X = strip_padding(X)
@@ -108,8 +120,14 @@ function viterbi(X, transitions, emissions, model, X_feats)
   --local cache = {}
 
   -- initialize
+  local X_window
+  local X_feats_window
   if model then
     pi[1]:zero()
+
+    -- initialize windows
+    X_window = init_window(X)
+    X_feats_window = init_window_feats(X_feats)
   elseif transitions then
     pi[1] = emissions[X[1]]
   end
@@ -118,7 +136,7 @@ function viterbi(X, transitions, emissions, model, X_feats)
     for prev_c = 1, nclasses do
       local y_hat
       if model then
-        local feats = to_feats(prev_c, X, X_feats, i)
+        local feats = to_feats(prev_c, X_window[i], X_feats[i])
         --local h = hash(feats)
         --if cache[h] then
           --y_hat = cache[h]
@@ -249,6 +267,10 @@ function compute_eval_err(X, Y, transitions, emissions, model, X_feats)
  end
 
 function MEMM()
+  if opt.warm_start_model ~= '' then
+    return torch.load(opt.warm_start_model).model
+  end
+
   local model = nn.Sequential()
   local inputs = nn.ParallelTable()
   local word_lookup = nn.LookupTable(vocab_size * window_size, nclasses)
@@ -464,8 +486,8 @@ function main()
    --vec_size = word_vecs:size(2)
    --
    -- More features
-   local X_feats = f:read('train_feats_input'):all():long()
-   local valid_X_feats = f:read('valid_feats_input'):all():long()
+   local X_feats = f:read('train_features_input'):all():long()
+   local valid_X_feats = f:read('valid_features_input'):all():long()
 
    -- window format for MEMM
    local X_window = f:read('train_input_window'):all():long()
