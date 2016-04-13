@@ -18,8 +18,8 @@ END_TAG = 9
 
 def clean_str(s, common_words_list):
     s = s.strip().lower()
-    if s not in common_words_list:
-        return 'UNK'
+    # if s not in common_words_list:
+        # return 'UNK'
 
     return s
 
@@ -57,9 +57,9 @@ def word_to_feats(word, common_words_list, features_to_idx=None):
         new_feats.append('CAP:HAS')
     else:
         new_feats.append('CAP:NONE')
+    new_feats.extend(['SUFF:' + word[-2:], 'PREF:' + word[:2]])
     word = clean_str(word, common_words_list)
 
-    new_feats.extend(['SUFF:' + word[-2:], 'PREF:' + word[:2]])
     # pos_features[sent].append(id_to_pos[global_id])
 
     if features_to_idx:
@@ -203,7 +203,7 @@ def window_format(X, X_feats, Y, V, nfeatures):
     """ Transform sentence format X, Y to window format for MEMM """
     N = len(X)
     num_feats = len(X_feats[0][0])
-    window_size = 5 # fix for now
+    window_size = 3 # fix for now
     w = window_size / 2
 
     X_window = []
