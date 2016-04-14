@@ -17,7 +17,7 @@ cmd:option('-warm_start_model', '', 'model to restart training')
 cmd:option('-alpha', 0.01, 'smoothing alpha')
 cmd:option('-beta', 1, 'beta for F-score')
 
-cmd:option('-eta', 0.01, 'learning rate for SGD')
+cmd:option('-eta', 1, 'learning rate for SGD')
 cmd:option('-batch_size', 32, 'batch size for SGD')
 cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
 
@@ -61,12 +61,11 @@ function to_feats(c, x, x_feats)
 end
 
 function hash(feats)
-  -- hash for viterbi speedup
-  local h = ''
-  for _,v in ipairs(feats) do
-    for i = 1, v[1]:size(1) do
-      h = h .. ',' .. v[1][i]
-    end
+  -- hash for speedup
+  local h = 0
+  feats = feats:squeeze()
+  for i = 1, feats:size(1) do
+    h = feats[i] + h
   end
   return h
 end
@@ -123,7 +122,7 @@ function viterbi(X, transitions, emissions, model, X_feats)
   local N = X:size(1)
   local pi = torch.Tensor(N, nclasses):fill(-math.huge)
   local bp = torch.zeros(N, nclasses):long()
-  --local cache = {}
+  local cache = {}
 
   -- initialize
   local X_window
@@ -135,7 +134,6 @@ function viterbi(X, transitions, emissions, model, X_feats)
 
     local feats = to_feats(start_tag, X_window[1], X_feats_window[1])
     local y_hat = model:forward(feats)
-    --print(feats, y_hat)
     pi[1] = y_hat:squeeze():clone()
   elseif transitions then
     pi[1] = emissions[X[1]]
@@ -146,18 +144,14 @@ function viterbi(X, transitions, emissions, model, X_feats)
       local y_hat
       if model then
         local feats = to_feats(prev_c, X_window[i], X_feats_window[i])
-        --local h = hash(feats)
-        --if cache[h] then
-          --y_hat = cache[h]
-        --else
+        local h = hash(feats)
+        if cache[h] then
+          y_hat = cache[h]
+        else
           y_hat = model:forward(feats)
           y_hat = y_hat:squeeze()
-          --print(feats, y_hat)
-          --print('center')
-          --print(feats[1][2] - vocab_size)
-          --io.read()
-          --cache[h] = y_hat:clone()
-        --end
+          cache[h] = y_hat:clone()
+        end
       elseif transitions then
         y_hat = emissions[X[i]] + transitions[prev_c]
       end
@@ -305,10 +299,15 @@ function MEMM()
 end
 
 function perceptron()
+  if opt.warm_start_model ~= '' then
+    return torch.load(opt.warm_start_model).model
+  end
+
   local model = nn.Sequential()
-  local lookup = nn.LookupTable(nfeatures + nclasses, nclasses)
-  lookup.weight:zero()
-  model:add(lookup)
+  -- TODO: include features
+  local word_lookup = nn.LookupTable(vocab_size * window_size, nclasses)
+  word_lookup.weight:zero()
+  model:add(word_lookup)
   model:add(nn.Sum(2))
   -- no softmax or bias
 
@@ -342,7 +341,7 @@ function model_eval(model, criterion, X, Y, X_feats)
   return total_loss / N
 end
 
-function train_perceptron(X, Y, valid_X, valid_Y)
+function train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
   -- X, Y in sentence format
   local max_epochs = opt.max_epochs
   local N = X:size(1)
@@ -353,6 +352,7 @@ function train_perceptron(X, Y, valid_X, valid_Y)
   local shuffle = torch.randperm(N):long()
   X = X:index(1, shuffle)
   Y = Y:index(1, shuffle)
+  X_feats = X_feats:index(1, shuffle)
 
   local prev_loss = 1e10
   local epoch = 1
@@ -360,37 +360,44 @@ function train_perceptron(X, Y, valid_X, valid_Y)
   while epoch <= max_epochs do
       print('Epoch:', epoch)
       local epoch_time = timer:time().real
-      local total_loss = 0
 
       model:training()
       model:zeroGradParameters()
 
       -- do Viterbi on each input
       for i = 1, X:size(1) do
-        local seq = viterbi(X[i], nil, nil, model)
+        local seq = viterbi(X[i], nil, nil, model, X_feats[i])
         local Y_seq = strip_padding(Y[i], end_tag)
+        local x_window = init_window(X[i])
+        local x_feats_window = init_window_feats(X_feats[i])
         assert(seq:size(1) == Y_seq:size(1))
-        for k = 2, seq:size(1) do
+        for k = 1, seq:size(1) do
           if seq[k] ~= Y_seq[k] then
             -- do update where pred does not equal gold
             model:zeroGradParameters()
-            local input = to_feats(seq[k-1], X[i][k])
+            local input
+            if k == 1 then
+              input = to_feats(start_tag, x_window[k], x_feats_window[k])
+            else
+              input = to_feats(seq[k-1], x_window[k], x_feats_window[k])
+            end
             local y_hat = model:forward(input)
             local _,m = torch.max(y_hat, 1)
-            m = torch.min(m[1])
-
-            -- construct gradient
-            local g = torch.zeros(1, nclasses)
-            g[1][Y_seq[k]] = -1
-            g[1][m] = 1
-            model:backward(input, g)
-            model:updateParameters(1)
+            m = torch.min(m[1]) -- predicted
+            if m ~= Y_seq[k] then
+              -- construct gradient
+              local g = torch.zeros(1, nclasses)
+              g[1][Y_seq[k]] = -1
+              g[1][m] = 1
+              model:backward(input, g)
+              model:updateParameters(1)
+            end
           end
         end
       end
 
       -- evaluate
-      local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model)
+      local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, valid_X_feats)
       print('Valid F-score:', fscore)
       local loss = 1 - fscore
 
@@ -421,6 +428,7 @@ function train_model(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
   local shuffle = torch.randperm(N):long()
   X = X:index(1, shuffle)
   Y = Y:index(1, shuffle)
+  X_feats = X_feats:index(1, shuffle)
 
   -- only call this once
   local params, grads = model:getParameters()
@@ -551,7 +559,7 @@ function main()
      print('Valid time:', (timer:time().real - time) * 1000, 'ms')
      print('Valid F-score:', fscore)
    elseif opt.classifier == 'perceptron' then
-     local model = train_perceptron(X, Y, valid_X, valid_Y)
+     local model = train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
    end
 end
 
