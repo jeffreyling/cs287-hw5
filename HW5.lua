@@ -54,25 +54,27 @@ function to_feats(c, x, x_feats)
   -- batch size 1 for model compatibility
   local shift = torch.range(0, vocab_size*(window_size-1), vocab_size):long()
   local words = x:clone():add(shift):view(1, x:size(1))
-  local num_feats = x_feats:size(1)/x:size(1)
-  local feats_shift = torch.range(0, nfeatures*(window_size-1), nfeatures):long()
-  for i = 2, num_feats do-- + 1 do
-    feats_shift = torch.cat(feats_shift, torch.range(0, nfeatures*(window_size-1), nfeatures):long(), 1)
-  end
-  local all_feats = x_feats:clone():add(feats_shift)--torch.cat(torch.zeros(5):fill(c):long(), x_feats:clone(), 1):add(feats_shift)
-  all_feats = torch.cat(torch.LongTensor{c+nfeatures*window_size}, all_feats, 1)
+
+  --local num_feats = x_feats:size(2)
+  --local feats_shift = torch.range(0, nfeatures*(window_size-1), nfeatures):long():view(window_size, 1)
+
+  --local all_feats = x_feats:clone():add(feats_shift:expand(window_size, num_feats))
+  --all_feats = all_feats:view(window_size * num_feats)
+  --all_feats = torch.cat(all_feats, torch.LongTensor{c+nfeatures*window_size}, 1)
+  local num_feats = x_feats:size(1)
+  local all_feats = x_feats:clone()
+  all_feats = all_feats:view(num_feats)
+  all_feats = torch.cat(all_feats, torch.LongTensor{c+nfeatures}, 1)
   all_feats = all_feats:view(1, all_feats:size(1))
-  -- print(all_feats)
   return {words, all_feats}
-  --return words
 end
 
 function hash(feats)
   -- hash for speedup
   local h = 0
-  feats = feats:squeeze()
-  for i = 1, feats:size(1) do
-    h = feats[i] + h
+  local f = feats[1]:squeeze()
+  for i = 1, f:size(1) do
+    h = f[i] + h
   end
   return h
 end
@@ -114,9 +116,9 @@ function init_window_feats(X)
   local pad_X = torch.cat(torch.LongTensor(w, num_feats):fill(start_word), X, 1)
   pad_X = torch.cat(pad_X, torch.LongTensor(w, num_feats):fill(end_word), 1)
 
-  local X_window = torch.LongTensor(X:size(1), num_feats * window_size)
+  local X_window = torch.LongTensor(X:size(1), window_size, num_feats)
   for i = 1, X:size(1) do
-    X_window[i] = pad_X:narrow(1, i, window_size):view(num_feats * window_size)
+    X_window[i] = pad_X:narrow(1, i, window_size)
   end
 
   return X_window
@@ -137,7 +139,8 @@ function viterbi(X, transitions, emissions, model, X_feats)
   if model then
     -- initialize windows
     X_window = init_window(X)
-    X_feats_window = init_window_feats(X_feats)
+    --X_feats_window = init_window_feats(X_feats)
+    X_feats_window = X_feats
 
     local feats = to_feats(start_tag, X_window[1], X_feats_window[1])
     local y_hat = model:forward(feats)
@@ -159,6 +162,8 @@ function viterbi(X, transitions, emissions, model, X_feats)
           y_hat = y_hat:squeeze()
           cache[h] = y_hat:clone()
         end
+        --print(feats[1], feats[2], y_hat)
+        --io.read()
       elseif transitions then
         y_hat = emissions[X[i]] + transitions[prev_c]
       end
@@ -292,7 +297,7 @@ function MEMM()
   local model = nn.Sequential()
   local inputs = nn.ParallelTable()
   local word_lookup = nn.LookupTable(vocab_size * window_size, nclasses)
-  local feats_lookup = nn.LookupTable(nfeatures * window_size + nclasses, nclasses)
+  local feats_lookup = nn.LookupTable(nfeatures + nclasses, nclasses)
   inputs:add(word_lookup)
   inputs:add(feats_lookup)
   model:add(inputs)
@@ -302,22 +307,6 @@ function MEMM()
   model:add(nn.Add(nclasses)) -- bias
   model:add(nn.LogSoftMax())
   
-  return model
-end
-
-function perceptron()
-  if opt.warm_start_model ~= '' then
-    return torch.load(opt.warm_start_model).model
-  end
-
-  local model = nn.Sequential()
-  -- TODO: include features
-  local word_lookup = nn.LookupTable(vocab_size * window_size, nclasses)
-  word_lookup.weight:zero()
-  model:add(word_lookup)
-  model:add(nn.Sum(2))
-  -- no softmax or bias
-
   return model
 end
 
@@ -338,7 +327,6 @@ function model_eval(model, criterion, X, Y, X_feats)
       local X_feats_batch = X_feats:narrow(1, batch, sz)
 
       local inputs = {X_batch, X_feats_batch}
-      --local inputs = X_batch
       local outputs = model:forward(inputs)
       local loss = criterion:forward(outputs, Y_batch)
 
@@ -346,6 +334,106 @@ function model_eval(model, criterion, X, Y, X_feats)
   end
 
   return total_loss / N
+end
+
+function train_model(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
+  local eta = opt.eta
+  local batch_size = opt.batch_size
+  local max_epochs = opt.max_epochs
+  local N = X:size(1)
+
+  local model = MEMM()
+  local criterion = nn.ClassNLLCriterion()
+
+  -- shuffle for batches
+  local shuffle = torch.randperm(N):long()
+  X = X:index(1, shuffle)
+  Y = Y:index(1, shuffle)
+  X_feats = X_feats:index(1, shuffle)
+
+  -- only call this once
+  local params, grads = model:getParameters()
+  local state = { learningRate = eta }
+
+  local prev_loss = 1e10
+  local epoch = 1
+  local timer = torch.Timer()
+  while epoch <= max_epochs do
+      print('Epoch:', epoch)
+      local epoch_time = timer:time().real
+      local total_loss = 0
+
+      -- loop through each batch
+      model:training()
+      for batch = 1, N, batch_size do
+          local sz = batch_size
+          if batch + batch_size > N then
+            sz = N - batch + 1
+          end
+          local X_batch = X:narrow(1, batch, sz)
+          local X_feats_batch = X_feats:narrow(1, batch, sz)
+          local Y_batch = Y:narrow(1, batch, sz)
+
+          -- closure to return err, df/dx
+          local func = function(x)
+            -- get new parameters
+            if x ~= params then
+              params:copy(x)
+            end
+            -- reset gradients
+            grads:zero()
+
+            -- forward
+            local inputs = {X_batch, X_feats_batch}
+            local outputs = model:forward(inputs)
+            local loss = criterion:forward(outputs, Y_batch)
+
+            -- track errors
+            total_loss = total_loss + loss * batch_size
+
+            -- compute gradients
+            local df_do = criterion:backward(outputs, Y_batch)
+            model:backward(inputs, df_do)
+
+            return loss, grads
+          end
+
+          optim.sgd(func, params, state)
+          model:get(1):get(2).weight[1]:zero() -- zero padding
+      end
+
+      print('Train loss:', total_loss / N)
+      local loss = model_eval(model, criterion, valid_X, valid_Y, valid_X_feats)
+      print('Valid loss:', loss)
+
+      print('time for one epoch: ', (timer:time().real - epoch_time) * 1000, 'ms')
+      print('')
+      if loss > prev_loss and epoch > 5 then
+        prev_loss = loss
+        break
+      end
+      prev_loss = loss
+      epoch = epoch + 1
+      torch.save(opt.model_out_name .. '_' .. opt.classifier .. '.t7', { model = model })
+  end
+  print('Trained', epoch-1, 'epochs')
+  return model, prev_loss
+end
+
+function perceptron()
+  if opt.warm_start_model ~= '' then
+    return torch.load(opt.warm_start_model).model
+  end
+
+  local model = nn.Sequential()
+  -- TODO: include features
+  local word_lookup = nn.LookupTable(vocab_size * window_size, nclasses)
+  word_lookup.weight:zero()
+  model:add(word_lookup)
+  model:add(nn.Sum(2))
+  -- no softmax or bias
+
+  return model
 end
 
 function train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
@@ -407,90 +495,6 @@ function train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
       local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, valid_X_feats)
       print('Valid F-score:', fscore)
       local loss = 1 - fscore
-
-      print('time for one epoch: ', (timer:time().real - epoch_time) * 1000, 'ms')
-      print('')
-      if loss > prev_loss and epoch > 5 then
-        prev_loss = loss
-        break
-      end
-      prev_loss = loss
-      epoch = epoch + 1
-      torch.save(opt.model_out_name .. '_' .. opt.classifier .. '.t7', { model = model })
-  end
-  print('Trained', epoch-1, 'epochs')
-  return model, prev_loss
-end
-
-function train_model(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
-  local eta = opt.eta
-  local batch_size = opt.batch_size
-  local max_epochs = opt.max_epochs
-  local N = X:size(1)
-
-  local model = MEMM()
-  local criterion = nn.ClassNLLCriterion()
-
-  -- shuffle for batches
-  local shuffle = torch.randperm(N):long()
-  X = X:index(1, shuffle)
-  Y = Y:index(1, shuffle)
-  X_feats = X_feats:index(1, shuffle)
-
-  -- only call this once
-  local params, grads = model:getParameters()
-  local state = { learningRate = eta }
-
-  local prev_loss = 1e10
-  local epoch = 1
-  local timer = torch.Timer()
-  while epoch <= max_epochs do
-      print('Epoch:', epoch)
-      local epoch_time = timer:time().real
-      local total_loss = 0
-
-      -- loop through each batch
-      model:training()
-      for batch = 1, N, batch_size do
-          local sz = batch_size
-          if batch + batch_size > N then
-            sz = N - batch + 1
-          end
-          local X_batch = X:narrow(1, batch, sz)
-          local X_feats_batch = X_feats:narrow(1, batch, sz)
-          local Y_batch = Y:narrow(1, batch, sz)
-
-          -- closure to return err, df/dx
-          local func = function(x)
-            -- get new parameters
-            if x ~= params then
-              params:copy(x)
-            end
-            -- reset gradients
-            grads:zero()
-
-            -- forward
-            local inputs = {X_batch, X_feats_batch}
-            --local inputs = X_batch
-            local outputs = model:forward(inputs)
-            local loss = criterion:forward(outputs, Y_batch)
-
-            -- track errors
-            total_loss = total_loss + loss * batch_size
-
-            -- compute gradients
-            local df_do = criterion:backward(outputs, Y_batch)
-            model:backward(inputs, df_do)
-
-            return loss, grads
-          end
-
-          optim.sgd(func, params, state)
-      end
-
-      print('Train loss:', total_loss / N)
-      local loss = model_eval(model, criterion, valid_X, valid_Y, valid_X_feats)
-      print('Valid loss:', loss)
 
       print('time for one epoch: ', (timer:time().real - epoch_time) * 1000, 'ms')
       print('')
