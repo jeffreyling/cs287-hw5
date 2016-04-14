@@ -45,18 +45,22 @@ def get_tag_ids(tag_dict):
     tag_to_id['</t>'] = END_TAG
     return tag_to_id
 
-def word_to_feats(word, pos, common_words_list, features_to_idx=None):
+def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx=None):
     new_feats = []
     if "suffix" in args.features:
         new_feats.append('SUFF:' + word[-2:])
     if "prefix" in args.features:
         new_feats.append('PREF:' + word[:2])
     if "pos" in args.features:
-        new_feats.append('POS:' + pos)
+        new_feats.append('POS:' + id_to_pos[global_id])
+        if str(int(global_id) + 1) in id_to_pos:
+            new_feats.append('POS:1:' + id_to_pos[str(int(global_id)+1)])
+        if str(int(global_id) - 1) in id_to_pos:
+            new_feats.append('POS:-1:' + id_to_pos[str(int(global_id)-1)])
     if "all_substr" in args.features:
         for i in range(len(word)):
             for j in range(i+1, len(word)):
-                new_feats.append('SUBSTR-' + str(i) + '-' + str(j) + ':' + word[i:j])
+                new_feats.append('SUBSTR:' + str(i) + ':' + str(j) + ':' + word[i:j])
     word = clean_str(word, common_words_list)
 
     if features_to_idx:
@@ -101,8 +105,7 @@ def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, id_to_pos, 
 
                 # X
                 word = line[2]
-                pos = id_to_pos[global_id]
-                new_feats, word = word_to_feats(word, pos, common_words_list, features_to_idx)
+                new_feats, word = word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx)
                 new_feats.extend([1]*(max_feats_len - len(new_feats)))
                 idx_features[sent].append(word_to_idx[word])
                 all_features[sent].append(new_feats)
@@ -148,8 +151,7 @@ def get_vocab(file_list, id_to_pos, common_words_list, dataset=''):
                     # Add new features
                     global_id = line.split()[0]
                     word = line.split()[2]
-                    pos = id_to_pos[global_id]
-                    new_feats, word = word_to_feats(word, pos, common_words_list)
+                    new_feats, word = word_to_feats(word, global_id, id_to_pos, common_words_list)
                     max_feats_len = max(max_feats_len, len(new_feats))
                     if word not in word_to_idx:
                         word_to_idx[word] = idx
