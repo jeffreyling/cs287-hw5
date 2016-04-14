@@ -47,14 +47,15 @@ def get_tag_ids(tag_dict):
 
 def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx=None):
     new_feats = []
+    word = clean_str(word, common_words_list)
     if args.suffix > 0:
         for i in range(1, args.suffix+1):
             if len(word) >= i:
-                new_feats.append('SUFF:' + str(i) + ':' + word[-1*i:])
+                new_feats.append('SUFF:' + word[-1*i:])
     if args.prefix > 0:
         for i in range(1, args.prefix+1):
             if len(word) >= i:
-                new_feats.append('PREF:' + str(i) + ':' + word[:i])
+                new_feats.append('PREF:' + word[:i])
     if args.pos > 0:
         new_feats.append('POS:' + id_to_pos[global_id])
         if str(int(global_id) + 1) in id_to_pos:
@@ -64,8 +65,7 @@ def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx
     if args.all_substr > 0:
         for i in range(len(word)):
             for j in range(i+1, len(word)):
-                new_feats.append('SUBSTR:' + str(i) + ':' + str(j) + ':' + word[i:j])
-    word = clean_str(word, common_words_list)
+                new_feats.append('SUBSTR:' + word[i:j])
 
     if features_to_idx:
         return [features_to_idx[feat] for feat in new_feats], word
