@@ -47,17 +47,21 @@ def get_tag_ids(tag_dict):
 
 def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx=None):
     new_feats = []
-    if "suffix" in args.features:
-        new_feats.append('SUFF:' + word[-2:])
-    if "prefix" in args.features:
-        new_feats.append('PREF:' + word[:2])
-    if "pos" in args.features:
+    if args.suffix > 0:
+        for i in range(1, args.suffix):
+            if len(word) >= i:
+                new_feats.append('SUFF:' + str(i) + ':' + word[-1*i:])
+    if args.prefix > 0:
+        for i in range(1, args.prefix):
+            if len(word) >= i:
+                new_feats.append('PREF:' + str(i) + ':' + word[:i])
+    if args.pos > 0:
         new_feats.append('POS:' + id_to_pos[global_id])
         if str(int(global_id) + 1) in id_to_pos:
             new_feats.append('POS:1:' + id_to_pos[str(int(global_id)+1)])
         if str(int(global_id) - 1) in id_to_pos:
             new_feats.append('POS:-1:' + id_to_pos[str(int(global_id)-1)])
-    if "all_substr" in args.features:
+    if args.all_substr > 0:
         for i in range(len(word)):
             for j in range(i+1, len(word)):
                 new_feats.append('SUBSTR:' + str(i) + ':' + str(j) + ':' + word[i:j])
@@ -240,8 +244,10 @@ def main(arguments):
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('dataset', help="Data set",
                         type=str)
-    parser.add_argument('features', help="Features to use",
-                        type=str, nargs="*", default=["prefix", "suffix"])
+    parser.add_argument('--suffix', type=int, default=0, help="Suffixes up to specified size")
+    parser.add_argument('--prefix', type=int, default=0, help="Prefixes up to specified size")
+    parser.add_argument('--pos', type=int, default=0, help="POS tags for word and surrounding words")
+    parser.add_argument('--all_substr', type=int, default=0, help="All substrings of a word")
     args = parser.parse_args(arguments)
     dataset = args.dataset
     train, valid, test, tag_dict = FILE_PATHS[dataset]
