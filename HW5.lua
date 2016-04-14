@@ -54,10 +54,17 @@ function to_feats(c, x, x_feats)
   -- batch size 1 for model compatibility
   local shift = torch.range(0, vocab_size*(window_size-1), vocab_size):long()
   local words = x:clone():add(shift):view(1, x:size(1))
-  --local all_feats = torch.cat(torch.LongTensor{c + nfeatures*window_size}, x_feats, 1)
-  --all_feats = all_feats:view(1, all_feats:size(1))
-  --return {words, all_feats}
-  return words
+  local num_feats = x_feats:size(1)/x:size(1)
+  local feats_shift = torch.range(0, nfeatures*(window_size-1), nfeatures):long()
+  for i = 2, num_feats do
+    feats_shift = torch.cat(feats_shift, torch.range(0, nfeatures*(window_size-1), nfeatures):long(), 1)
+  end
+  local all_feats = x_feats:clone():add(feats_shift)
+  all_feats = torch.cat(torch.LongTensor{c + nfeatures*window_size}, x_feats, 1)
+  all_feats = all_feats:view(1, all_feats:size(1))
+  -- print(all_feats)
+  return {words, all_feats}
+  --return words
 end
 
 function hash(feats)
@@ -289,14 +296,14 @@ function MEMM()
   end
 
   local model = nn.Sequential()
-  --local inputs = nn.ParallelTable()
+  local inputs = nn.ParallelTable()
   local word_lookup = nn.LookupTable(vocab_size * window_size, nclasses)
-  --local feats_lookup = nn.LookupTable(nfeatures * window_size + nclasses, nclasses)
-  --inputs:add(word_lookup)
-  --inputs:add(feats_lookup)
-  --model:add(inputs)
-  --model:add(nn.JoinTable(2))
-  model:add(word_lookup)
+  local feats_lookup = nn.LookupTable(nfeatures * window_size + nclasses, nclasses)
+  inputs:add(word_lookup)
+  inputs:add(feats_lookup)
+  model:add(inputs)
+  model:add(nn.JoinTable(2))
+  -- model:add(word_lookup)
   model:add(nn.Sum(2)) -- sum w_i*x_i
   model:add(nn.Add(nclasses)) -- bias
   model:add(nn.LogSoftMax())
@@ -331,8 +338,8 @@ function model_eval(model, criterion, X, Y, X_feats)
       local Y_batch = Y:narrow(1, batch, sz)
       local X_feats_batch = X_feats:narrow(1, batch, sz)
 
-      --local inputs = {X_batch, X_feats_batch}
-      local inputs = X_batch
+      local inputs = {X_batch, X_feats_batch}
+      --local inputs = X_batch
       local outputs = model:forward(inputs)
       local loss = criterion:forward(outputs, Y_batch)
 
@@ -455,8 +462,8 @@ function train_model(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
             grads:zero()
 
             -- forward
-            --local inputs = {X_batch, X_feats_batch}
-            local inputs = X_batch
+            local inputs = {X_batch, X_feats_batch}
+            --local inputs = X_batch
             local outputs = model:forward(inputs)
             local loss = criterion:forward(outputs, Y_batch)
 
