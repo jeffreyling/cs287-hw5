@@ -45,35 +45,24 @@ def get_tag_ids(tag_dict):
     tag_to_id['</t>'] = END_TAG
     return tag_to_id
 
-def word_to_feats(word, common_words_list, features_to_idx=None):
+def word_to_feats(word, pos, common_words_list, features_to_idx=None):
     new_feats = []
     new_feats.append('SUFF:' + word[-2:])
     new_feats.append('PREF:' + word[:2])
+    new_feats.append('POS:' + pos)
     word = clean_str(word, common_words_list)
-
-    # pos_features[sent].append(id_to_pos[global_id])
 
     if features_to_idx:
         return [features_to_idx[feat] for feat in new_feats], word
     else:
         return new_feats, word
 
-def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, common_words_list, pos_tags, dataset, max_sent_len=0, max_feats_len=0, test=False):
+def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, id_to_pos, common_words_list, dataset, max_sent_len=0, max_feats_len=0, test=False):
     # Construct feature sets for each file. One sentence per row
     idx_features = []
     all_features = []
     lbl = []
     ids = []
-
-    # Load POS tags dictionary
-    # id_to_pos = {}
-    # with open(pos_tags, 'r') as f:
-        # # Skip header
-        # f.next()
-        # for line in f:
-            # line = line.strip()
-            # global_id, tag = line.split(',')
-            # id_to_pos[global_id] = tag
 
     sent = 0
     new_sent = True
@@ -105,7 +94,8 @@ def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, common_word
 
                 # X
                 word = line[2]
-                new_feats, word = word_to_feats(word, common_words_list, features_to_idx)
+                pos = id_to_pos[global_id]
+                new_feats, word = word_to_feats(word, pos, common_words_list, features_to_idx)
                 new_feats.extend([1]*(max_feats_len - len(new_feats)))
                 idx_features[sent].append(word_to_idx[word])
                 all_features[sent].append(new_feats)
@@ -127,7 +117,7 @@ def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, common_word
 
     return np.array(idx_features, dtype=np.int32), np.array(all_features, dtype=np.int32), np.array(lbl, dtype=np.int32), np.array(ids, dtype=np.int32)
 
-def get_vocab(file_list, common_words_list, dataset=''):
+def get_vocab(file_list, id_to_pos, common_words_list, dataset=''):
     # Construct index feature dictionary.
     word_to_idx = {'<s>': 1, '</s>': 2}
     features_to_idx = {'PAD': 1}
@@ -149,8 +139,10 @@ def get_vocab(file_list, common_words_list, dataset=''):
                         continue
                     sent_len += 1
                     # Add new features
+                    global_id = line.split()[0]
                     word = line.split()[2]
-                    new_feats, word = word_to_feats(word, common_words_list)
+                    pos = id_to_pos[global_id]
+                    new_feats, word = word_to_feats(word, pos, common_words_list)
                     max_feats_len = max(max_feats_len, len(new_feats))
                     if word not in word_to_idx:
                         word_to_idx[word] = idx
@@ -253,9 +245,20 @@ def main(arguments):
     print 'Getting common words...'
     common_words_list = get_common_words(WORD_VECS_PATH)
 
+    # Get global id to POS mapping
+    print 'Getting POS tags...'
+    id_to_pos = {}
+    with open(POS_TAGS_PATH, 'r') as f:
+        # Skip header
+        f.next()
+        for line in f:
+            line = line.strip()
+            global_id, tag = line.split(',')
+            id_to_pos[global_id] = tag
+
     # Get index features
     print 'Getting vocab...'
-    word_to_idx, features_to_idx, max_sent_len, max_feats_len = get_vocab([train, valid, test], common_words_list, dataset)
+    word_to_idx, features_to_idx, max_sent_len, max_feats_len = get_vocab([train, valid, test], id_to_pos, common_words_list, dataset)
     with open('vocab_list.txt', 'w') as f:
         for k,v in word_to_idx.items():
             f.write("%s\t%d\n" % (k,v))
@@ -269,19 +272,19 @@ def main(arguments):
 
     # Convert data
     print 'Processing data...'
-    train_input, train_feats_input, train_output, _ = convert_data(train, word_to_idx, features_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len, max_feats_len)
+    train_input, train_feats_input, train_output, _ = convert_data(train, word_to_idx, features_to_idx, tag_to_id, id_to_pos, common_words_list, dataset, max_sent_len, max_feats_len)
         # feat_lengths.append(45) # POS tags?
 
     # To windows
     train_input_window, train_feats_input_window, train_output_window = window_format(train_input.tolist(), train_feats_input.tolist(), train_output.tolist(), V, nfeatures)
 
     if valid:
-        valid_input, valid_feats_input, valid_output, _ = convert_data(valid, word_to_idx, features_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len, max_feats_len)
+        valid_input, valid_feats_input, valid_output, _ = convert_data(valid, word_to_idx, features_to_idx, tag_to_id, id_to_pos, common_words_list, dataset, max_sent_len, max_feats_len)
         # To windows
         valid_input_window, valid_feats_input_window, valid_output_window = window_format(valid_input.tolist(), valid_feats_input.tolist(), valid_output.tolist(), V, nfeatures)
 
     if test:
-        test_input, test_feats_input, _, test_ids = convert_data(test, word_to_idx, features_to_idx, tag_to_id, common_words_list, POS_TAGS_PATH, dataset, max_sent_len, max_feats_len, test=True)
+        test_input, test_feats_input, _, test_ids = convert_data(test, word_to_idx, features_to_idx, tag_to_id, id_to_pos, common_words_list, dataset, max_sent_len, max_feats_len, test=True)
 
 
     # Get word vecs
