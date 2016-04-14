@@ -48,11 +48,11 @@ def get_tag_ids(tag_dict):
 def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx=None):
     new_feats = []
     if args.suffix > 0:
-        for i in range(1, args.suffix):
+        for i in range(1, args.suffix+1):
             if len(word) >= i:
                 new_feats.append('SUFF:' + str(i) + ':' + word[-1*i:])
     if args.prefix > 0:
-        for i in range(1, args.prefix):
+        for i in range(1, args.prefix+1):
             if len(word) >= i:
                 new_feats.append('PREF:' + str(i) + ':' + word[:i])
     if args.pos > 0:
