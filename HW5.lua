@@ -109,19 +109,20 @@ function init_window(X)
 end
 
 function init_window_feats(X)
-  local w = math.floor(window_size / 2)
-  if w == 0 then return X end
+  return X
+  --local w = math.floor(window_size / 2)
+  --if w == 0 then return X end
 
-  local num_feats = X:size(2)
-  local pad_X = torch.cat(torch.LongTensor(w, num_feats):fill(start_word), X, 1)
-  pad_X = torch.cat(pad_X, torch.LongTensor(w, num_feats):fill(end_word), 1)
+  --local num_feats = X:size(2)
+  --local pad_X = torch.cat(torch.LongTensor(w, num_feats):fill(start_word), X, 1)
+  --pad_X = torch.cat(pad_X, torch.LongTensor(w, num_feats):fill(end_word), 1)
 
-  local X_window = torch.LongTensor(X:size(1), window_size, num_feats)
-  for i = 1, X:size(1) do
-    X_window[i] = pad_X:narrow(1, i, window_size)
-  end
+  --local X_window = torch.LongTensor(X:size(1), window_size, num_feats)
+  --for i = 1, X:size(1) do
+    --X_window[i] = pad_X:narrow(1, i, window_size)
+  --end
 
-  return X_window
+  --return X_window
 end
 
 function viterbi(X, transitions, emissions, model, X_feats)
@@ -139,8 +140,7 @@ function viterbi(X, transitions, emissions, model, X_feats)
   if model then
     -- initialize windows
     X_window = init_window(X)
-    --X_feats_window = init_window_feats(X_feats)
-    X_feats_window = X_feats
+    X_feats_window = init_window_feats(X_feats)
 
     local feats = to_feats(start_tag, X_window[1], X_feats_window[1])
     local y_hat = model:forward(feats)
@@ -162,6 +162,8 @@ function viterbi(X, transitions, emissions, model, X_feats)
           y_hat = y_hat:squeeze()
           cache[h] = y_hat:clone()
         end
+        --local sdf = model:get(1):forward(feats)
+        --print(sdf[1], sdf[2])
         --print(feats[1], feats[2], y_hat)
         --io.read()
       elseif transitions then
@@ -426,10 +428,15 @@ function perceptron()
   end
 
   local model = nn.Sequential()
-  -- TODO: include features
+  local inputs = nn.ParallelTable()
   local word_lookup = nn.LookupTable(vocab_size * window_size, nclasses)
+  local feats_lookup = nn.LookupTable(nfeatures + nclasses, nclasses)
   word_lookup.weight:zero()
-  model:add(word_lookup)
+  feats_lookup.weight:zero()
+  inputs:add(word_lookup)
+  inputs:add(feats_lookup)
+  model:add(inputs)
+  model:add(nn.JoinTable(2))
   model:add(nn.Sum(2))
   -- no softmax or bias
 
@@ -460,9 +467,13 @@ function train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
       model:zeroGradParameters()
 
       -- do Viterbi on each input
+      print(X:size(1))
       for i = 1, X:size(1) do
+        if i % 100 == 0 then print(i) end
         local seq = viterbi(X[i], nil, nil, model, X_feats[i])
         local Y_seq = strip_padding(Y[i], end_tag)
+        --print(seq, Y_seq)
+        --io.read()
         local x_window = init_window(X[i])
         local x_feats_window = init_window_feats(X_feats[i])
         assert(seq:size(1) == Y_seq:size(1))
@@ -477,15 +488,20 @@ function train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
               input = to_feats(seq[k-1], x_window[k], x_feats_window[k])
             end
             local y_hat = model:forward(input)
-            local _,m = torch.max(y_hat, 1)
-            m = torch.min(m[1]) -- predicted
+            local _,m = torch.max(y_hat:squeeze(), 1)
+            m = m[1] -- predicted
             if m ~= Y_seq[k] then
               -- construct gradient
               local g = torch.zeros(1, nclasses)
               g[1][Y_seq[k]] = -1
               g[1][m] = 1
+              --print('k', k, 'gold', Y_seq[k], 'pred',m)
+              --print(g)
+              --io.read()
               model:backward(input, g)
               model:updateParameters(1)
+              -- padding to zero
+              model:get(1):get(2).weight[1]:zero()
             end
           end
         end
