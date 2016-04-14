@@ -56,11 +56,11 @@ function to_feats(c, x, x_feats)
   local words = x:clone():add(shift):view(1, x:size(1))
   local num_feats = x_feats:size(1)/x:size(1)
   local feats_shift = torch.range(0, nfeatures*(window_size-1), nfeatures):long()
-  for i = 2, num_feats do
+  for i = 2, num_feats do-- + 1 do
     feats_shift = torch.cat(feats_shift, torch.range(0, nfeatures*(window_size-1), nfeatures):long(), 1)
   end
-  local all_feats = x_feats:clone():add(feats_shift)
-  all_feats = torch.cat(torch.LongTensor{c + nfeatures*window_size}, x_feats, 1)
+  local all_feats = x_feats:clone():add(feats_shift)--torch.cat(torch.zeros(5):fill(c):long(), x_feats:clone(), 1):add(feats_shift)
+  all_feats = torch.cat(torch.LongTensor{c+nfeatures*window_size}, all_feats, 1)
   all_feats = all_feats:view(1, all_feats:size(1))
   -- print(all_feats)
   return {words, all_feats}
@@ -428,6 +428,7 @@ function train_model(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
   local shuffle = torch.randperm(N):long()
   X = X:index(1, shuffle)
   Y = Y:index(1, shuffle)
+  X_feats = X_feats:index(1, shuffle)
 
   -- only call this once
   local params, grads = model:getParameters()
