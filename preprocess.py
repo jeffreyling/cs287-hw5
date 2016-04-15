@@ -293,7 +293,7 @@ def main(arguments):
                         type=str)
     parser.add_argument('--suffix', type=int, default=4, help="Suffixes up to specified size")
     parser.add_argument('--prefix', type=int, default=4, help="Prefixes up to specified size")
-    parser.add_argument('--pos', type=int, default=1, help="POS tags for word and surrounding words")
+    parser.add_argument('--pos', type=int, default=0, help="POS tags for word and surrounding words")
     parser.add_argument('--lemma', type=int, default=0, help="Word lemmas using NLTK")
     parser.add_argument('--all_substr', type=int, default=0, help="All substrings of a word")
     parser.add_argument('--cap', type=int, default=0, help="Capitalization")
