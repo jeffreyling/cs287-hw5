@@ -567,8 +567,10 @@ end
 
 function kaggle(model, X, X_feats) 
   f = io.open('CONLL_pred.test', 'w')
+  f:write('ID,Labels\n')
   for i = 1, X:size(1) do
     local seq = viterbi(X[i], nil, nil, model, X_feats[i])
+    seq = seq:narrow(1, 2, seq:size(1)-2)
     local line = i .. ','
     local prev = 1
     for j = 1, seq:size(1) do 

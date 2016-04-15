@@ -111,10 +111,9 @@ def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx
     if args.pos > 0:
         new_feats.append('POS:' + id_to_pos[global_id])
         if str(int(global_id) + 1) in id_to_pos:
-            new_feats.append('POS:1:' + id_to_pos[str(int(global_id)+1)])
+            new_feats.append('POS:1:' + id_to_pos[global_id + 1])
         if str(int(global_id) - 1) in id_to_pos:
-            new_feats.append('POS:-1:' + id_to_pos[str(int(global_id)-1)])
-
+            new_feats.append('POS:-1:' + id_to_pos[global_id - 1])
     if args.lemma > 0:
         new_feats.extend(lemma_feat(word))
 
@@ -189,7 +188,7 @@ def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, id_to_pos, 
                         lbl.append([START_TAG])
                     new_sent = False
 
-                global_id = line[0]
+                global_id = int(line[0])
                 ids[sent].append(global_id)
 
                 # X
@@ -218,7 +217,7 @@ def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, id_to_pos, 
 
     return np.array(idx_features, dtype=np.int32), np.array(all_features, dtype=np.int32), np.array(lbl, dtype=np.int32), np.array(ids, dtype=np.int32)
 
-def get_vocab(file_list, id_to_pos, common_words_list, dataset='', window_size=5):
+def get_vocab(file_list, pos_dict_list, common_words_list, dataset='', window_size=5):
     # Construct index feature dictionary.
     word_to_idx = {'<s>': 1, '</s>': 2}
     features_to_idx = {'PAD': 1}
@@ -228,7 +227,7 @@ def get_vocab(file_list, id_to_pos, common_words_list, dataset='', window_size=5
     feat_idx = 2
     max_sent_len = 0
     max_feats_len = 0
-    for filename in file_list:
+    for filename, id_to_pos in zip(file_list, pos_dict_list):
         if filename:
             words = get_words(filename)
             with open(filename, "r") as f:
@@ -243,7 +242,7 @@ def get_vocab(file_list, id_to_pos, common_words_list, dataset='', window_size=5
                         continue
                     sent_len += 1
                     # Add new features
-                    global_id = line.split()[0]
+                    global_id = int(line.split()[0])
                     word = line.split()[2]
                     window = [words[sent][max(sent_len-window_size/2,0) : sent_len], words[sent][sent_len+1: sent_len+window_size/2+1]]
                     new_feats, word = word_to_feats(word, global_id, id_to_pos, common_words_list, window=window)
@@ -319,7 +318,9 @@ FILE_PATHS = {"CONLL": ("data/train.num.txt",
                         "data/test.num.txt",
                         "data/tags.txt")}
 WORD_VECS_PATH = 'data/glove.6B.50d.txt'
-# POS_TAGS_PATH = 'CONLL_pred_tags.test'
+POS_TAG_PATHS = {"CONLL": ("data/train_pos.txt",
+                           "data/valid_pos.txt",
+                           "data/test_pos.txt")}
 args = {}
 
 def main(arguments):
@@ -352,18 +353,29 @@ def main(arguments):
 
     # Get global id to POS mapping
     print 'Getting POS tags...'
-    id_to_pos = {}
-    # with open(POS_TAGS_PATH, 'r') as f:
-        # # Skip header
-        # f.next()
-        # for line in f:
-            # line = line.strip()
-            # global_id, tag = line.split(',')
-            # id_to_pos[global_id] = tag
+    train_pos_path, valid_pos_path, test_pos_path = POS_TAG_PATHS[dataset]
+    train_pos = {}
+    with open(train_pos_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            global_id, tag = line.split(',')
+            train_pos[int(global_id)] = tag
+    valid_pos = {}
+    with open(valid_pos_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            global_id, tag = line.split(',')
+            valid_pos[int(global_id)] = tag
+    test_pos = {}
+    with open(test_pos_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            global_id, tag = line.split(',')
+            test_pos[int(global_id)] = tag
 
     # Get index features
     print 'Getting vocab...'
-    word_to_idx, features_to_idx, max_sent_len, max_feats_len = get_vocab([train, valid, test], id_to_pos, common_words_list, dataset)
+    word_to_idx, features_to_idx, max_sent_len, max_feats_len = get_vocab([train, valid, test], [train_pos, valid_pos, test_pos], common_words_list, dataset)
     with open('vocab_list.txt', 'w') as f:
         for k,v in word_to_idx.items():
             f.write("%s\t%d\n" % (k,v))
@@ -377,20 +389,19 @@ def main(arguments):
 
     # Convert data
     print 'Processing data...'
-    train_input, train_feats_input, train_output, _ = convert_data(train, word_to_idx, features_to_idx, tag_to_id, id_to_pos, common_words_list, dataset, max_sent_len, max_feats_len)
+    train_input, train_feats_input, train_output, _ = convert_data(train, word_to_idx, features_to_idx, tag_to_id, train_pos, common_words_list, dataset, max_sent_len, max_feats_len)
         # feat_lengths.append(45) # POS tags?
 
     # To windows
     train_input_window, train_feats_input_window, train_output_window = window_format(train_input.tolist(), train_feats_input.tolist(), train_output.tolist(), V, nfeatures)
 
     if valid:
-        valid_input, valid_feats_input, valid_output, _ = convert_data(valid, word_to_idx, features_to_idx, tag_to_id, id_to_pos, common_words_list, dataset, max_sent_len, max_feats_len)
+        valid_input, valid_feats_input, valid_output, _ = convert_data(valid, word_to_idx, features_to_idx, tag_to_id, valid_pos, common_words_list, dataset, max_sent_len, max_feats_len)
         # To windows
         valid_input_window, valid_feats_input_window, valid_output_window = window_format(valid_input.tolist(), valid_feats_input.tolist(), valid_output.tolist(), V, nfeatures)
 
     if test:
-        test_input, test_feats_input, _, test_ids = convert_data(test, word_to_idx, features_to_idx, tag_to_id, id_to_pos, common_words_list, dataset, max_sent_len, max_feats_len, test=True)
-
+        test_input, test_feats_input, _, test_ids = convert_data(test, word_to_idx, features_to_idx, tag_to_id, test_pos, common_words_list, dataset, max_sent_len, max_feats_len, test=True)
 
     # Get word vecs
     print 'Getting word vecs...'
