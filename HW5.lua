@@ -359,7 +359,6 @@ function train_model(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
   -- only call this once
   local params, grads = model:getParameters()
   local state = { learningRate = eta }
-  model:zeroGradParameters()
 
   local prev_loss = 1e10
   local epoch = 1
