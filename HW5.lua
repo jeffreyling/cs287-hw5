@@ -528,6 +528,39 @@ function train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
   return model, prev_loss
 end
 
+function kaggle(model, X, X_feats) 
+  f = io.open('CONLL_pred.test', 'w')
+  for i = 1, X:size(1) do
+    local seq = viterbi(X[i], nil, nil, model, X_feats[i])
+    local line = i .. ','
+    local prev = 1
+    for j = 1, seq:size(1) do 
+      if seq[j] == 1 then
+        if seq[j] ~= prev then
+          -- mention ends, no new mention starts
+          line = line .. ' '
+        end
+      elseif seq[j] >= 2 and seq[j] <= 5 then
+        if seq[j] == prev then
+          -- current mention continues
+          line = line .. '-' .. j
+        elseif prev ~= 1 then
+          -- mention ends, new mention starts
+          line = line .. ' ' .. string.sub(tags[seq[j]-1], 3) .. '-' .. j else
+          -- new mention starts
+          line = line .. string.sub(tags[seq[j]-1], 3) .. '-' .. j
+        end
+      elseif seq[j] >= 6 and seq[j] <= 7 then
+        -- mention ends, no new mention starts
+        line = line .. '-' .. j
+      end
+      prev = seq[j]
+    end
+  line = line .. '\n'
+  f:write(line)
+  end
+end
+
 function main() 
    -- Parse input params
    opt = cmd:parse(arg)
@@ -587,40 +620,15 @@ function main()
        print('Valid F-score:', fscore)
      elseif opt.action == 'test' then
        model = torch.load(opt.test_model).model
-       f = io.open('CONLL_pred.test', 'w')
-       for i = 1, test_X:size(1) do
-          local seq = viterbi(test_X[i], nil, nil, model, test_X_feats[i])
-          local line = i .. ','
-          local prev = 1
-          for j = 1, seq:size(1) do 
-            if seq[j] == 1 then
-              if seq[j] ~= prev then
-                -- mention ends, no new mention starts
-                line = line .. ' '
-              end
-            elseif seq[j] >= 2 and seq[j] <= 5 then
-              if seq[j] == prev then
-                -- current mention continues
-                line = line .. '-' .. j
-              elseif prev ~= 1 then
-                -- mention ends, new mention starts
-                line = line .. ' ' .. string.sub(tags[seq[j]-1], 3) .. '-' .. j
-              else
-                -- new mention starts
-                line = line .. string.sub(tags[seq[j]-1], 3) .. '-' .. j
-              end
-            elseif seq[j] >= 6 and seq[j] <= 7 then
-              -- mention ends, no new mention starts
-              line = line .. '-' .. j
-            end
-            prev = seq[j]
-          end
-          line = line .. '\n'
-          f:write(line)
-       end
+       kaggle(model, test_X, test_X_feats)
      end
    elseif opt.classifier == 'perceptron' then
-     local model = train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
+     if opt.action == 'train' then
+      local model = train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
+     elseif opt.action == 'test' then
+       local model = torch.load(opt.test_model).model
+       kaggle(model, test_X, test_X_feats)
+     end
    end
 end
 
