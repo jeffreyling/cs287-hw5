@@ -83,9 +83,9 @@ def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx
     if args.pos > 0:
         new_feats.append('POS:' + id_to_pos[global_id])
         if str(int(global_id) + 1) in id_to_pos:
-            new_feats.append('POS:1:' + id_to_pos[str(int(global_id)+1)])
+            new_feats.append('POS:1:' + id_to_pos[global_id + 1])
         if str(int(global_id) - 1) in id_to_pos:
-            new_feats.append('POS:-1:' + id_to_pos[str(int(global_id)-1)])
+            new_feats.append('POS:-1:' + id_to_pos[global_id - 1])
     if args.lemma > 0:
         new_feats.append('LEM:' + lemmatizer.lemmatize(word))
     if args.all_substr > 0:
@@ -150,7 +150,7 @@ def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, id_to_pos, 
                         lbl.append([START_TAG])
                     new_sent = False
 
-                global_id = line[0]
+                global_id = int(line[0])
                 ids[sent].append(global_id)
 
                 # X
@@ -204,7 +204,7 @@ def get_vocab(file_list, pos_dict_list, common_words_list, dataset='', window_si
                         continue
                     sent_len += 1
                     # Add new features
-                    global_id = line.split()[0]
+                    global_id = int(line.split()[0])
                     word = line.split()[2]
                     window = [words[sent][max(sent_len-window_size/2,0) : sent_len], words[sent][sent_len+1: sent_len+window_size/2+1]]
                     new_feats, word = word_to_feats(word, global_id, id_to_pos, common_words_list, window=window)
@@ -318,28 +318,22 @@ def main(arguments):
     train_pos_path, valid_pos_path, test_pos_path = POS_TAG_PATHS[dataset]
     train_pos = {}
     with open(train_pos_path, 'r') as f:
-        # Skip header
-        f.next()
         for line in f:
             line = line.strip()
             global_id, tag = line.split(',')
-            train_pos[global_id] = tag
+            train_pos[int(global_id)] = tag
     valid_pos = {}
     with open(valid_pos_path, 'r') as f:
-        # Skip header
-        f.next()
         for line in f:
             line = line.strip()
             global_id, tag = line.split(',')
-            valid_pos[global_id] = tag
+            valid_pos[int(global_id)] = tag
     test_pos = {}
     with open(test_pos_path, 'r') as f:
-        # Skip header
-        f.next()
         for line in f:
             line = line.strip()
             global_id, tag = line.split(',')
-            test_pos[global_id] = tag
+            test_pos[int(global_id)] = tag
 
     # Get index features
     print 'Getting vocab...'
