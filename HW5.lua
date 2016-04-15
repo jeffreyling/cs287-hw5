@@ -268,7 +268,7 @@ function score_seq(seq, Y)
   return pred_correct, pred, correct
 end
 
-function compute_eval_err(X, Y, transitions, emissions, model, X_feats, test)
+function compute_eval_err(X, Y, transitions, emissions, model, X_feats)
    -- Compute F score of predicted mentions
    local tot_pred_correct = 0
    local tot_pred = 0
@@ -547,7 +547,7 @@ function train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
       end
 
       -- evaluate
-      local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, valid_X_feats, false)
+      local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, valid_X_feats)
       print('Valid F-score:', fscore)
       local loss = 1 - fscore
 
@@ -563,6 +563,39 @@ function train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
   end
   print('Trained', epoch-1, 'epochs')
   return model, prev_loss
+end
+
+function kaggle(model, X, X_feats) 
+  f = io.open('CONLL_pred.test', 'w')
+  for i = 1, X:size(1) do
+    local seq = viterbi(X[i], nil, nil, model, X_feats[i])
+    local line = i .. ','
+    local prev = 1
+    for j = 1, seq:size(1) do 
+      if seq[j] == 1 then
+        if seq[j] ~= prev then
+          -- mention ends, no new mention starts
+          line = line .. ' '
+        end
+      elseif seq[j] >= 2 and seq[j] <= 5 then
+        if seq[j] == prev then
+          -- current mention continues
+          line = line .. '-' .. j
+        elseif prev ~= 1 then
+          -- mention ends, new mention starts
+          line = line .. ' ' .. string.sub(tags[seq[j]-1], 3) .. '-' .. j else
+          -- new mention starts
+          line = line .. string.sub(tags[seq[j]-1], 3) .. '-' .. j
+        end
+      elseif seq[j] >= 6 and seq[j] <= 7 then
+        -- mention ends, no new mention starts
+        line = line .. '-' .. j
+      end
+      prev = seq[j]
+    end
+  line = line .. '\n'
+  f:write(line)
+  end
 end
 
 function main() 
@@ -582,6 +615,7 @@ function main()
    -- More features
    local X_feats = f:read('train_features_input'):all():long()
    local valid_X_feats = f:read('valid_features_input'):all():long()
+   local test_X_feats = f:read('test_features_input'):all():long()
 
    -- window format for MEMM
    local X_window = f:read('train_input_window'):all():long()
@@ -599,7 +633,7 @@ function main()
    start_tag = 8
    end_tag = 9
    window_size = 5 -- set for now
-   --tags = {'I-PER', 'I-LOC', 'I-ORG', 'I-MISC', 'B-MISC', 'B-LOC'}
+   tags = {'I-PER', 'I-LOC', 'I-ORG', 'I-MISC', 'B-MISC', 'B-LOC'}
 
    if opt.classifier == 'hmm' then
      local transitions, emissions = get_hmm_probs(X, Y)
@@ -607,29 +641,31 @@ function main()
 
      local timer = torch.Timer()
      local time = timer:time().real
-     local fscore = compute_eval_err(valid_X, valid_Y, transitions, emissions, nil, false)
+     local fscore = compute_eval_err(valid_X, valid_Y, transitions, emissions, nil)
      print('Valid time:', (timer:time().real - time) * 1000, 'ms')
      print('Valid F-score:', fscore)
    elseif opt.classifier == 'memm' or opt.classifier == 'memm_neural' then
      local model
      if opt.action == 'train' then
        model = train_model(X_window, Y_window, X_feats_window, valid_X_window, valid_Y_window, valid_X_feats_window, word_vecs)
+
+       -- Viterbi
+       local timer = torch.Timer()
+       local time = timer:time().real
+       local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, valid_X_feats)
+       print('Valid time:', (timer:time().real - time) * 1000, 'ms')
+       print('Valid F-score:', fscore)
      elseif opt.action == 'test' then
        model = torch.load(opt.test_model).model
-     end
-
-     -- Viterbi
-     local timer = torch.Timer()
-     local time = timer:time().real
-     local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, valid_X_feats, false)
-     print('Valid time:', (timer:time().real - time) * 1000, 'ms')
-     print('Valid F-score:', fscore)
-     if opt.action == 'test' then
-        seq_mentions = get_mentions(seq)
-        print(seq_mentions)
+       kaggle(model, test_X, test_X_feats)
      end
    elseif opt.classifier == 'perceptron' then
-     local model = train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
+     if opt.action == 'train' then
+      local model = train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
+     elseif opt.action == 'test' then
+       local model = torch.load(opt.test_model).model
+       kaggle(model, test_X, test_X_feats)
+     end
    end
 end
 
