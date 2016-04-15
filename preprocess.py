@@ -65,22 +65,21 @@ def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx
             if len(word) >= i:
                 new_feats.append('SUFF:' + word[-1*i:])
 
-        for k,l in enumerate(window):
-            for j,w in enumerate(l):
-                for i in range(1, args.suffix+1):
-                    if len(w) >= i and w != '<s>' and w != '</s>':
-                        new_feats.append(('SUFF:%d:%d:' % (k,j)) + w[-1*i:])
-
     if args.prefix > 0:
         for i in range(1, args.prefix+1):
             if len(word) >= i:
                 new_feats.append('PREF:' + word[:i])
 
+    if args.window > 0:
         for k,l in enumerate(window):
             for j,w in enumerate(l):
+                for i in range(1, args.suffix+1):
+                    if len(w) >= i and w != '<s>' and w != '</s>':
+                        new_feats.append(('SUFF:%d:%d:' % (k,j)) + w[-1*i:])
                 for i in range(1, args.prefix+1):
                     if len(w) >= i and w != '<s>' and w != '</s>':
                         new_feats.append(('PREF:%d:%d:' % (k,j)) + w[:i])
+
     if args.pos > 0:
         new_feats.append('POS:' + id_to_pos[global_id])
         if str(int(global_id) + 1) in id_to_pos:
@@ -281,7 +280,7 @@ FILE_PATHS = {"CONLL": ("data/train.num.txt",
                         "data/test.num.txt",
                         "data/tags.txt")}
 WORD_VECS_PATH = 'data/glove.6B.50d.txt'
-POS_TAGS_PATH = 'CONLL_pos_pred.test'
+POS_TAGS_PATH = 'CONLL_pred.test'
 args = {}
 
 def main(arguments):
@@ -293,13 +292,16 @@ def main(arguments):
                         type=str)
     parser.add_argument('--suffix', type=int, default=4, help="Suffixes up to specified size")
     parser.add_argument('--prefix', type=int, default=4, help="Prefixes up to specified size")
+    parser.add_argument('--window', type=bool, default=False, help="Use features in window")
     parser.add_argument('--pos', type=int, default=0, help="POS tags for word and surrounding words")
     parser.add_argument('--lemma', type=int, default=0, help="Word lemmas using NLTK")
+    parser.add_argument('--cap', type=int, default=1, help="Capitalization")
     parser.add_argument('--all_substr', type=int, default=0, help="All substrings of a word")
-    parser.add_argument('--cap', type=int, default=0, help="Capitalization")
     args = parser.parse_args(arguments)
     dataset = args.dataset
     train, valid, test, tag_dict = FILE_PATHS[dataset]
+
+    window_size = 5
 
     # Get tag to id mapping
     print 'Get tag ids...'
@@ -357,6 +359,7 @@ def main(arguments):
     embed = np.random.uniform(-0.25, 0.25, (V, len(word_vecs.values()[0])))
     for word, vec in word_vecs.items():
         embed[word_to_idx[word] - 1] = vec
+    embed = np.tile(embed, (window_size, 1))
 
     print train_input.shape, train_feats_input.shape, train_output.shape, train_input_window.shape, train_feats_input_window.shape
     print train_input_window, train_feats_input_window
