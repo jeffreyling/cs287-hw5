@@ -265,7 +265,7 @@ function score_seq(seq, Y)
   return pred_correct, pred, correct
 end
 
-function compute_eval_err(X, Y, transitions, emissions, model, X_feats)
+function compute_eval_err(X, Y, transitions, emissions, model, X_feats, test)
    -- Compute F score of predicted mentions
    local tot_pred_correct = 0
    local tot_pred = 0
@@ -278,6 +278,7 @@ function compute_eval_err(X, Y, transitions, emissions, model, X_feats)
        seq = viterbi(X[i], transitions, emissions, nil, nil)
      end
      local Y_seq = strip_padding(Y[i], end_tag)
+
      --print(seq, Y_seq)
      --io.read()
 
@@ -508,7 +509,7 @@ function train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
       end
 
       -- evaluate
-      local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, valid_X_feats)
+      local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, valid_X_feats, false)
       print('Valid F-score:', fscore)
       local loss = 1 - fscore
 
@@ -568,23 +569,27 @@ function main()
 
      local timer = torch.Timer()
      local time = timer:time().real
-     local fscore = compute_eval_err(valid_X, valid_Y, transitions, emissions, nil)
+     local fscore = compute_eval_err(valid_X, valid_Y, transitions, emissions, nil, false)
      print('Valid time:', (timer:time().real - time) * 1000, 'ms')
      print('Valid F-score:', fscore)
    elseif opt.classifier == 'memm' then
      local model
      if opt.action == 'train' then
        model = train_model(X_window, Y_window, X_feats_window, valid_X_window, valid_Y_window, valid_X_feats_window)
-     else
+     elseif opt.action == 'test' then
        model = torch.load(opt.test_model).model
      end
 
      -- Viterbi
      local timer = torch.Timer()
      local time = timer:time().real
-     local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, valid_X_feats)
+     local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, valid_X_feats, false)
      print('Valid time:', (timer:time().real - time) * 1000, 'ms')
      print('Valid F-score:', fscore)
+     if opt.action == 'test' then
+        seq_mentions = get_mentions(seq)
+        print(seq_mentions)
+     end
    elseif opt.classifier == 'perceptron' then
      local model = train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
    end

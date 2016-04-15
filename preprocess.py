@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+    #!/usr/bin/env python
 
 """NER Preprocessing
 """
@@ -234,7 +234,7 @@ FILE_PATHS = {"CONLL": ("data/train.num.txt",
                         "data/test.num.txt",
                         "data/tags.txt")}
 WORD_VECS_PATH = 'data/glove.6B.50d.txt'
-POS_TAGS_PATH = 'CONLL_pred.test'
+POS_TAGS_PATH = 'CONLL_pos_pred.test'
 args = {}
 
 def main(arguments):
