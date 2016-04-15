@@ -7,7 +7,7 @@ cmd = torch.CmdLine()
 
 -- Cmd Args
 cmd:option('-datafile', '', 'data file')
-cmd:option('-classifier', 'hmm', 'classifier to use: hmm, memm, perceptron')
+cmd:option('-classifier', 'hmm', 'classifier to use: hmm, memm, perceptron, memm_neural')
 cmd:option('-model_out_name', 'train', 'output file name of model')
 cmd:option('-action', 'train', 'train or test')
 cmd:option('-test_model', '', 'model to test on')
@@ -20,6 +20,9 @@ cmd:option('-beta', 1, 'beta for F-score')
 cmd:option('-eta', 1, 'learning rate for SGD')
 cmd:option('-batch_size', 32, 'batch size for SGD')
 cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
+
+cmd:option('-embed_feats', 20, 'embedding for features')
+cmd:option('-hidden', 100, 'hidden size')
 
 function get_hmm_probs(X, Y)
   local alpha = opt.alpha
@@ -307,9 +310,38 @@ function MEMM()
   inputs:add(feats_lookup)
   model:add(inputs)
   model:add(nn.JoinTable(2))
-  -- model:add(word_lookup)
   model:add(nn.Sum(2)) -- sum w_i*x_i
   model:add(nn.Add(nclasses)) -- bias
+  model:add(nn.LogSoftMax())
+  
+  return model
+end
+
+function MEMM_neural(word_vecs)
+  if opt.warm_start_model ~= '' then
+    return torch.load(opt.warm_start_model).model
+  end
+  local vec_size = word_vecs:size(2)
+
+  local model = nn.Sequential()
+  local inputs = nn.ParallelTable()
+  local word_lookup = nn.LookupTable(vocab_size * window_size, vec_size)
+  local feats_lookup = nn.LookupTable(nfeatures + nclasses, opt.embed_feats)
+  word_lookup.weight = word_vecs:clone()
+  feats_lookup.weight:zero()
+  inputs:add(word_lookup)
+  inputs:add(feats_lookup)
+  model:add(inputs)
+
+  local concat = nn.ParallelTable()
+  concat:add(nn.View(vec_size * window_size))
+  concat:add(nn.Sum(2))
+  model:add(concat)
+
+  model:add(nn.JoinTable(2))
+  model:add(nn.Linear(vec_size * window_size + opt.embed_feats, opt.hidden))
+  model:add(nn.Tanh())
+  model:add(nn.Linear(opt.hidden, nclasses))
   model:add(nn.LogSoftMax())
   
   return model
@@ -341,13 +373,18 @@ function model_eval(model, criterion, X, Y, X_feats)
   return total_loss / N
 end
 
-function train_model(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
+function train_model(X, Y, X_feats, valid_X, valid_Y, valid_X_feats, word_vecs)
   local eta = opt.eta
   local batch_size = opt.batch_size
   local max_epochs = opt.max_epochs
   local N = X:size(1)
 
-  local model = MEMM()
+  local model
+  if opt.classifier == 'memm' then
+    model = MEMM()
+  elseif opt.classifier == 'memm_neural' then
+    model = MEMM_neural(word_vecs)
+  end
   local criterion = nn.ClassNLLCriterion()
 
   -- shuffle for batches
@@ -539,8 +576,8 @@ function main()
    local test_X = f:read('test_input'):all():long()
    --local test_ids = f:read('test_ids'):all():long()
    -- Word embeddings from glove
-   --local word_vecs = f:read('word_vecs'):all()
-   --vec_size = word_vecs:size(2)
+   local word_vecs = f:read('word_vecs'):all()
+   vec_size = word_vecs:size(2)
    --
    -- More features
    local X_feats = f:read('train_features_input'):all():long()
@@ -573,10 +610,10 @@ function main()
      local fscore = compute_eval_err(valid_X, valid_Y, transitions, emissions, nil, false)
      print('Valid time:', (timer:time().real - time) * 1000, 'ms')
      print('Valid F-score:', fscore)
-   elseif opt.classifier == 'memm' then
+   elseif opt.classifier == 'memm' or opt.classifier == 'memm_neural' then
      local model
      if opt.action == 'train' then
-       model = train_model(X_window, Y_window, X_feats_window, valid_X_window, valid_Y_window, valid_X_feats_window)
+       model = train_model(X_window, Y_window, X_feats_window, valid_X_window, valid_Y_window, valid_X_feats_window, word_vecs)
      elseif opt.action == 'test' then
        model = torch.load(opt.test_model).model
      end
