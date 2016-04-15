@@ -60,10 +60,23 @@ def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx
         for i in range(1, args.suffix+1):
             if len(word) >= i:
                 new_feats.append('SUFF:' + word[-1*i:])
+
+        for k,l in enumerate(window):
+            for j,w in enumerate(l):
+                for i in range(1, args.suffix+1):
+                    if len(w) >= i and w != '<s>' and w != '</s>':
+                        new_feats.append(('SUFF:%d:%d:' % (k,j)) + w[-1*i:])
+
     if args.prefix > 0:
         for i in range(1, args.prefix+1):
             if len(word) >= i:
                 new_feats.append('PREF:' + word[:i])
+
+        for k,l in enumerate(window):
+            for j,w in enumerate(l):
+                for i in range(1, args.prefix+1):
+                    if len(w) >= i and w != '<s>' and w != '</s>':
+                        new_feats.append(('PREF:%d:%d:' % (k,j)) + w[:i])
     if args.pos > 0:
         new_feats.append('POS:' + id_to_pos[global_id])
         if str(int(global_id) + 1) in id_to_pos:
@@ -80,12 +93,32 @@ def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx
     else:
         return new_feats, word
 
-def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, id_to_pos, common_words_list, dataset, max_sent_len=0, max_feats_len=0, test=False):
+def get_words(filename):
+    words = []
+    words.append(['<s>'])
+    sent = 0
+    with open(filename, "r") as f:
+        for line in f:
+            line = line.strip().split()
+            if len(line) == 0:
+                words[sent].append('</s>')
+                words.append(['<s>'])
+                sent += 1
+                continue
+
+            word = line[2]
+            words[sent].append(word)
+
+    return words
+
+def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, id_to_pos, common_words_list, dataset, max_sent_len=0, max_feats_len=0, test=False, window_size=5):
     # Construct feature sets for each file. One sentence per row
     idx_features = []
     all_features = []
     lbl = []
     ids = []
+
+    words = get_words(data_name)
 
     sent = 0
     new_sent = True
@@ -117,7 +150,9 @@ def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, id_to_pos, 
 
                 # X
                 word = line[2]
-                new_feats, word = word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx)
+                i = len(idx_features[sent])
+                window = [words[sent][max(i-window_size/2,0) : i], words[sent][i+1: i+window_size/2+1]]
+                new_feats, word = word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx, window=window)
                 new_feats.extend([1]*(max_feats_len - len(new_feats)))
                 idx_features[sent].append(word_to_idx[word])
                 all_features[sent].append(new_feats)
@@ -139,7 +174,7 @@ def convert_data(data_name, word_to_idx, features_to_idx, tag_to_id, id_to_pos, 
 
     return np.array(idx_features, dtype=np.int32), np.array(all_features, dtype=np.int32), np.array(lbl, dtype=np.int32), np.array(ids, dtype=np.int32)
 
-def get_vocab(file_list, id_to_pos, common_words_list, dataset=''):
+def get_vocab(file_list, id_to_pos, common_words_list, dataset='', window_size=5):
     # Construct index feature dictionary.
     word_to_idx = {'<s>': 1, '</s>': 2}
     features_to_idx = {'PAD': 1}
@@ -151,19 +186,23 @@ def get_vocab(file_list, id_to_pos, common_words_list, dataset=''):
     max_feats_len = 0
     for filename in file_list:
         if filename:
+            words = get_words(filename)
             with open(filename, "r") as f:
                 sent_len = 0
+                sent = 0
                 for line in f:
                     line = line.rstrip()
                     if len(line) == 0:
                         max_sent_len = max(max_sent_len, sent_len)
                         sent_len = 0
+                        sent += 1
                         continue
                     sent_len += 1
                     # Add new features
                     global_id = line.split()[0]
                     word = line.split()[2]
-                    new_feats, word = word_to_feats(word, global_id, id_to_pos, common_words_list)
+                    window = [words[sent][max(sent_len-window_size/2,0) : sent_len], words[sent][sent_len+1: sent_len+window_size/2+1]]
+                    new_feats, word = word_to_feats(word, global_id, id_to_pos, common_words_list, window=window)
                     max_feats_len = max(max_feats_len, len(new_feats))
                     if word not in word_to_idx:
                         word_to_idx[word] = idx
