@@ -301,6 +301,8 @@ function MEMM()
   local inputs = nn.ParallelTable()
   local word_lookup = nn.LookupTable(vocab_size * window_size, nclasses)
   local feats_lookup = nn.LookupTable(nfeatures + nclasses, nclasses)
+  word_lookup.weight:zero()
+  feats_lookup.weight:zero()
   inputs:add(word_lookup)
   inputs:add(feats_lookup)
   model:add(inputs)
@@ -357,6 +359,7 @@ function train_model(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
   -- only call this once
   local params, grads = model:getParameters()
   local state = { learningRate = eta }
+  model:zeroGradParameters()
 
   local prev_loss = 1e10
   local epoch = 1
@@ -465,7 +468,6 @@ function train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
       local epoch_time = timer:time().real
 
       model:training()
-      model:zeroGradParameters()
 
       -- do Viterbi on each input
       print(X:size(1))
