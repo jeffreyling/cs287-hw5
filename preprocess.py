@@ -49,36 +49,64 @@ def get_tag_ids(tag_dict):
     tag_to_id['</t>'] = END_TAG
     return tag_to_id
 
+def cap_feat(word, k=None, j=None):
+    feats = []
+    if word.isupper():
+        feats.append('CAP:UPPER')
+    elif word[0].isupper():
+        feats.append('CAP:FIRST')
+    elif any(let.isupper() for let in word):
+        feats.append('CAP:HAS')
+    if k:
+        return [("%d:%d:" % (k,j)) + f for f in feats]
+    else:
+        return feats
+
+def suffix_feat(word, k=None, j=None):
+    feats = []
+    for i in range(1, args.suffix+1):
+        if len(word) >= i:
+            feats.append('SUFF:' + word[-i:])
+    if k:
+        return [("%d:%d:" % (k,j)) + f for f in feats]
+    else:
+        return feats
+
+def prefix_feat(word, k=None, j=None):
+    feats = []
+    for i in range(1, args.prefix+1):
+        if len(word) >= i:
+            feats.append('PREF:' + word[:i])
+    if k:
+        return [("%d:%d:" % (k,j)) + f for f in feats]
+    else:
+        return feats
+
+def lemma_feat(word, k=None, j=None):
+    feats = []
+    feats.append('LEM:' + lemmatizer.lemmatize(word))
+    if k:
+        return [("%d:%d:" % (k,j)) + f for f in feats]
+    else:
+        return feats
+
 def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx=None, window=None):
     new_feats = []
     if args.cap > 0:
-        if word.isupper():
-            new_feats.append('CAP:UPPER')
-        elif word[0].isupper():
-            new_feats.append('CAP:FIRST')
-        elif any(let.isupper() for let in word):
-            new_feats.append('CAP:HAS')
-
-    word = clean_str(word, common_words_list)
-    if args.suffix > 0:
-        for i in range(1, args.suffix+1):
-            if len(word) >= i:
-                new_feats.append('SUFF:' + word[-1*i:])
-
-    if args.prefix > 0:
-        for i in range(1, args.prefix+1):
-            if len(word) >= i:
-                new_feats.append('PREF:' + word[:i])
+        new_feats.extend(cap_feat(word))
 
     if args.window > 0:
         for k,l in enumerate(window):
             for j,w in enumerate(l):
-                for i in range(1, args.suffix+1):
-                    if len(w) >= i and w != '<s>' and w != '</s>':
-                        new_feats.append(('SUFF:%d:%d:' % (k,j)) + w[-1*i:])
-                for i in range(1, args.prefix+1):
-                    if len(w) >= i and w != '<s>' and w != '</s>':
-                        new_feats.append(('PREF:%d:%d:' % (k,j)) + w[:i])
+                new_feats.extend(cap_feat(w,k,j))
+
+
+    word = clean_str(word, common_words_list)
+    if args.suffix > 0:
+        new_feats.extend(suffix_feat(word))
+
+    if args.prefix > 0:
+        new_feats.extend(prefix_feat(word))
 
     if args.pos > 0:
         new_feats.append('POS:' + id_to_pos[global_id])
@@ -87,11 +115,21 @@ def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx
         if str(int(global_id) - 1) in id_to_pos:
             new_feats.append('POS:-1:' + id_to_pos[global_id - 1])
     if args.lemma > 0:
-        new_feats.append('LEM:' + lemmatizer.lemmatize(word))
+        new_feats.extend(lemma_feat(word))
+
+    if args.window > 0:
+        for k,l in enumerate(window):
+            for j,w in enumerate(l):
+                # new_feats.extend(suffix_feat(w,k,j))
+                # new_feats.extend(prefix_feat(w,k,j))
+                new_feats.extend(lemma_feat(w,k,j))
+
     if args.all_substr > 0:
-        for i in range(len(word)):
-            for j in range(i+1, len(word)):
-                new_feats.append('SUBSTR:' + word[i:j])
+        w = "^" + word + "|"
+        l = len(w)
+        substr = set([w[i:j+1] for i in xrange(l) for j in xrange(i, l)])
+        for s in substr:
+            new_feats.append('SUBSTR:' + s)
 
     if features_to_idx:
         return [features_to_idx[feat] for feat in new_feats], word
