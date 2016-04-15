@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+    #!/usr/bin/env python
 
 """NER Preprocessing
 """
@@ -8,13 +8,17 @@ import h5py
 import argparse
 import sys
 import re
+from nltk.stem import WordNetLemmatizer
 
 # Your preprocessing, features construction, and word2vec code.
+
 
 START_WORD = 1
 END_WORD = 2
 START_TAG = 8
 END_TAG = 9
+
+lemmatizer = WordNetLemmatizer()
 
 def clean_str(s, common_words_list):
     s = s.strip().lower()
@@ -83,6 +87,8 @@ def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx
             new_feats.append('POS:1:' + id_to_pos[str(int(global_id)+1)])
         if str(int(global_id) - 1) in id_to_pos:
             new_feats.append('POS:-1:' + id_to_pos[str(int(global_id)-1)])
+    if args.lemma > 0:
+        new_feats.append('LEM:' + lemmatizer.lemmatize(word))
     if args.all_substr > 0:
         for i in range(len(word)):
             for j in range(i+1, len(word)):
@@ -275,7 +281,7 @@ FILE_PATHS = {"CONLL": ("data/train.num.txt",
                         "data/test.num.txt",
                         "data/tags.txt")}
 WORD_VECS_PATH = 'data/glove.6B.50d.txt'
-POS_TAGS_PATH = 'CONLL_pred.test'
+POS_TAGS_PATH = 'CONLL_pos_pred.test'
 args = {}
 
 def main(arguments):
@@ -285,9 +291,10 @@ def main(arguments):
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('dataset', help="Data set",
                         type=str)
-    parser.add_argument('--suffix', type=int, default=0, help="Suffixes up to specified size")
-    parser.add_argument('--prefix', type=int, default=0, help="Prefixes up to specified size")
-    parser.add_argument('--pos', type=int, default=0, help="POS tags for word and surrounding words")
+    parser.add_argument('--suffix', type=int, default=4, help="Suffixes up to specified size")
+    parser.add_argument('--prefix', type=int, default=4, help="Prefixes up to specified size")
+    parser.add_argument('--pos', type=int, default=1, help="POS tags for word and surrounding words")
+    parser.add_argument('--lemma', type=int, default=0, help="Word lemmas using NLTK")
     parser.add_argument('--all_substr', type=int, default=0, help="All substrings of a word")
     parser.add_argument('--cap', type=int, default=0, help="Capitalization")
     args = parser.parse_args(arguments)
