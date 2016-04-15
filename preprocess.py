@@ -49,16 +49,25 @@ def get_tag_ids(tag_dict):
     tag_to_id['</t>'] = END_TAG
     return tag_to_id
 
-def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx=None):
+def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx=None, window=None):
     new_feats = []
+    if args.cap > 0:
+        if word.isupper():
+            new_feats.append('CAP:UPPER')
+        elif word[0].isupper():
+            new_feats.append('CAP:FIRST')
+        elif any(let.isupper() for let in word):
+            new_feats.append('CAP:HAS')
+
+    word = clean_str(word, common_words_list)
     if args.suffix > 0:
         for i in range(1, args.suffix+1):
             if len(word) >= i:
-                new_feats.append('SUFF:' + str(i) + ':' + word[-1*i:])
+                new_feats.append('SUFF:' + word[-1*i:])
     if args.prefix > 0:
         for i in range(1, args.prefix+1):
             if len(word) >= i:
-                new_feats.append('PREF:' + str(i) + ':' + word[:i])
+                new_feats.append('PREF:' + word[:i])
     if args.pos > 0:
         new_feats.append('POS:' + id_to_pos[global_id])
         if str(int(global_id) + 1) in id_to_pos:
@@ -79,8 +88,7 @@ def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx
     if args.all_substr > 0:
         for i in range(len(word)):
             for j in range(i+1, len(word)):
-                new_feats.append('SUBSTR:' + str(i) + ':' + str(j) + ':' + word[i:j])
-    word = clean_str(word, common_words_list)
+                new_feats.append('SUBSTR:' + word[i:j])
 
     if features_to_idx:
         return [features_to_idx[feat] for feat in new_feats], word
@@ -199,10 +207,7 @@ def load_word_vecs(file_name, vocab):
 
 def shift_window(X, nfeatures, multifeat=False):
     """ Shifts indices so that each position in a window has different features """
-    if multifeat:
-        return [[el + i*nfeatures for el in x] for i,x in enumerate(X)]
-    else:
-        return [x + i*nfeatures for i,x in enumerate(X)]
+    return [x + i*nfeatures for i,x in enumerate(X)]
 
 def window_format(X, X_feats, Y, V, nfeatures):
     """ Transform sentence format X, Y to window format for MEMM """
@@ -223,8 +228,6 @@ def window_format(X, X_feats, Y, V, nfeatures):
             if cur_X[j] == cur_X[j-1] and cur_X[j] == END_WORD:
                 break
             x = shift_window(cur_X[j-w : j+w+1], V)
-            # xf = shift_window(cur_X_feats[j-w : j+w+1], nfeatures, multifeat=True)
-            # xf = [el for feats in xf for el in feats] # flatten feats
             xf = cur_X_feats[j] # single no window
             xf = [feat for feat in xf] # flatten feats
             X_window.append(x)
@@ -238,7 +241,6 @@ def window_format(X, X_feats, Y, V, nfeatures):
     # Add previous class to features
     new_col = np.hstack(([START_TAG], Y_window[:-1])).reshape(Y_window.shape[0], 1)
     new_col = np.add(new_col, nfeatures)
-    # new_col = np.add(new_col, nfeatures*window_size)
     X_feats_window = np.concatenate((X_feats_window, new_col), axis=1)
 
     return X_window, X_feats_window, Y_window
@@ -265,6 +267,7 @@ def main(arguments):
     parser.add_argument('--cap', type=int, default=1, help="Capitalization features")
     parser.add_argument('--lemma', type=int, default=0, help="Word lemmas using NLTK")
     parser.add_argument('--all_substr', type=int, default=0, help="All substrings of a word")
+    parser.add_argument('--cap', type=int, default=0, help="Capitalization")
     args = parser.parse_args(arguments)
     dataset = args.dataset
     train, valid, test, tag_dict = FILE_PATHS[dataset]
