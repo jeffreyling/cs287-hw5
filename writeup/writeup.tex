@@ -2,30 +2,20 @@
 \documentclass[11pt]{article}
 
 \usepackage{common}
-\title{HW0: Sample Assignment}
-\author{Alexander Rush \\ srush@seas.harvard.edu \and Sam Wiseman \\ swiseman@seas.harvard.edu }
+\title{HW5: Named Entity Recognition}
+\author{Jeffrey Ling \\ jling@college.harvard.edu \and Rohil Prasad \\ rprasad@college.harvard.edu} 
 \begin{document}
 
 \maketitle{}
 \section{Introduction}
 
-This note lays out our expectation for a homework submission in
-\textit{CS287: Statistical Natural Language Processing}. While you do
-not have to follow this template to the letter, we do expect that
-write-ups have a very clear structure and cover all the elements
-described in this note. With this in mind, the burden is on the
-presenter to demonstrate why deviations from the standard are
-necessary.
+In this assignment, we tackle the problem of Named Entity Recognition (NER). The goal of this task is to construct a model that can pick out and determine the type of important named entities in a given text. For example, in the sentence ``I went to Disney World.'', the block ``Disney World'' should be labeled as a special place. 
 
-All write-ups should include a short introduction. In this section you
-should summarize the underlying problem in high-level language and
-describe the extensions that you have decided to propose in your
-implementation. When you describe these extensions you should
-carefully cite the papers of interest. For instance, it will often be
-useful to cite the work seen in class
-\citep{murphy2012machine}. Alternatively, you can also cite papers
-inline, for instance the work of \citet{berger1996maximum}.
+We implement and discuss several approaches to NER in this paper, all trained on a portion of the CONLL 2003 Shared Task dataset. These include a standard Hidden Markov Model (HMM), a neural Maximum Entropy Markov Model (MEMM), and a structured perceptron. To label entities given our model outputs, we implement the Viterbi algorithm and the forward-backward algorithm. 
 
+Furthermore, unlike previous assignments, feature selection is especially important for this problem. We implement several of the features described in in [Tjong Kim Sang paper] as well. 
+
+In Section 2, we give a formal description of our problem and establish our notation. In Section 3, we give detailed descriptions of the algorithms used for feature extraction, training, and evaluation. In Section 4, we present our experimental results. In Section 5, we discuss our findings. 
 
 \section{Problem Description}
 
