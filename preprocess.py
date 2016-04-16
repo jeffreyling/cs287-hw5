@@ -57,6 +57,8 @@ def cap_feat(word, k=None, j=None):
         feats.append('CAP:FIRST')
     elif any(let.isupper() for let in word):
         feats.append('CAP:HAS')
+    else:
+        feats.append('CAP:LOWER')
     if k:
         return [("%d:%d:" % (k,j)) + f for f in feats]
     else:
@@ -110,9 +112,9 @@ def word_to_feats(word, global_id, id_to_pos, common_words_list, features_to_idx
 
     if args.pos > 0:
         new_feats.append('POS:' + id_to_pos[global_id])
-        if str(int(global_id) + 1) in id_to_pos:
+        if global_id + 1 in id_to_pos:
             new_feats.append('POS:1:' + id_to_pos[global_id + 1])
-        if str(int(global_id) - 1) in id_to_pos:
+        if global_id - 1 in id_to_pos:
             new_feats.append('POS:-1:' + id_to_pos[global_id - 1])
     if args.lemma > 0:
         new_feats.extend(lemma_feat(word))
@@ -334,12 +336,22 @@ def main(arguments):
     parser.add_argument('--prefix', type=int, default=4, help="Prefixes up to specified size")
     parser.add_argument('--window', type=bool, default=False, help="Use features in window")
     parser.add_argument('--pos', type=int, default=0, help="POS tags for word and surrounding words")
-    parser.add_argument('--lemma', type=int, default=0, help="Word lemmas using NLTK")
+    parser.add_argument('--lemma', type=int, default=1, help="Word lemmas using NLTK")
     parser.add_argument('--cap', type=int, default=1, help="Capitalization")
     parser.add_argument('--all_substr', type=int, default=0, help="All substrings of a word")
+
+    parser.add_argument('--neural', type=bool, default=False, help="preprocess for neural MEMM")
     args = parser.parse_args(arguments)
     dataset = args.dataset
     train, valid, test, tag_dict = FILE_PATHS[dataset]
+
+    if args.neural:
+        # Cap only
+        args.suffix = 0
+        args.prefix = 0
+        args.pos = 0
+        args.lemma = 0
+        args.all_substr = 0
 
     window_size = 5
 

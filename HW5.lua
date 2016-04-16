@@ -21,7 +21,7 @@ cmd:option('-eta', 1, 'learning rate for SGD')
 cmd:option('-batch_size', 32, 'batch size for SGD')
 cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
 
-cmd:option('-embed_feats', 20, 'embedding for features')
+cmd:option('-embed_feats', 5, 'embedding for features')
 cmd:option('-hidden', 100, 'hidden size')
 
 function get_hmm_probs(X, Y)
@@ -146,7 +146,10 @@ function viterbi(X, transitions, emissions, model, X_feats)
     X_feats_window = init_window_feats(X_feats)
 
     local feats = to_feats(start_tag, X_window[1], X_feats_window[1])
-    local y_hat = model:forward(feats)
+    -- stupid hack
+    feats[1] = torch.cat(feats[1], feats[1], 1)
+    feats[2] = torch.cat(feats[2], feats[2], 1)
+    local y_hat = model:forward(feats)[1]
     pi[1] = y_hat:squeeze():clone()
   elseif transitions then
     pi[1] = emissions[X[1]]
@@ -161,7 +164,10 @@ function viterbi(X, transitions, emissions, model, X_feats)
         if cache[h] then
           y_hat = cache[h]
         else
-          y_hat = model:forward(feats)
+        -- stupid hack
+        feats[1] = torch.cat(feats[1], feats[1], 1)
+        feats[2] = torch.cat(feats[2], feats[2], 1)
+        y_hat = model:forward(feats)[1]
           y_hat = y_hat:squeeze()
           cache[h] = y_hat:clone()
         end
@@ -330,7 +336,8 @@ function MEMM_neural(word_vecs)
   local model = nn.Sequential()
   local inputs = nn.ParallelTable()
   local word_lookup = nn.LookupTable(vocab_size * window_size, vec_size)
-  local feats_lookup = nn.LookupTable(nfeatures + nclasses, opt.embed_feats)
+  --local feats_lookup = nn.LookupTable(nfeatures + nclasses, opt.embed_feats)
+  local feats_lookup = nn.LookupTable(5 + nclasses, opt.embed_feats) -- 3 for cap
   word_lookup.weight = word_vecs:clone()
   feats_lookup.weight:zero()
   inputs:add(word_lookup)
@@ -339,7 +346,7 @@ function MEMM_neural(word_vecs)
 
   local concat = nn.ParallelTable()
   concat:add(nn.View(vec_size * window_size))
-  concat:add(nn.Sum(2))
+  concat:add(nn.Sequential():add(nn.Sum(2)):add(nn.Squeeze()))
   model:add(concat)
 
   model:add(nn.JoinTable(2))
@@ -662,17 +669,17 @@ function main()
      local model
      if opt.action == 'train' then
        model = train_model(X_window, Y_window, X_feats_window, valid_X_window, valid_Y_window, valid_X_feats_window, word_vecs)
-
-       -- Viterbi
-       local timer = torch.Timer()
-       local time = timer:time().real
-       local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, valid_X_feats)
-       print('Valid time:', (timer:time().real - time) * 1000, 'ms')
-       print('Valid F-score:', fscore)
      elseif opt.action == 'test' then
        model = torch.load(opt.test_model).model
        kaggle(model, test_X, test_X_feats)
      end
+
+     -- Viterbi
+     local timer = torch.Timer()
+     local time = timer:time().real
+     local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, valid_X_feats)
+     print('Valid time:', (timer:time().real - time) * 1000, 'ms')
+     print('Valid F-score:', fscore)
    elseif opt.classifier == 'perceptron' then
      if opt.action == 'train' then
       local model = train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
