@@ -200,6 +200,10 @@ function viterbi(X, transitions, emissions, model, X_feats)
   return rev_seq
 end
 
+function forward_backward(X, transitions, emissions, model, X_feats)
+ -- TODO: Write this (copy viterbi code above)
+end
+
 function compute_fscore(total_predicted_correct, total_predicted, total_correct, beta)
   beta = beta or opt.beta
 
@@ -504,13 +508,18 @@ function train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
       local epoch_time = timer:time().real
 
       model:training()
+      params, grads = model:getParameters()
+      param_total = torch.zeros(params:size())
 
       -- do Viterbi on each input
       print(X:size(1))
       for i = 1, X:size(1) do
+        --params:mul(i-1):div(i)
         if i % 100 == 0 then print(i) end
         local seq = viterbi(X[i], nil, nil, model, X_feats[i])
         local Y_seq = strip_padding(Y[i], end_tag)
+        local scale = nn.Sequential()
+
         --print(seq, Y_seq)
         --io.read()
         local x_window = init_window(X[i])
@@ -544,7 +553,10 @@ function train_perceptron(X, Y, X_feats, valid_X, valid_Y, valid_X_feats)
             end
           end
         end
+        param_total:add(params)
       end
+
+      params = param_total:div(X:size(1))
 
       -- evaluate
       local fscore = compute_eval_err(valid_X, valid_Y, nil, nil, model, valid_X_feats)
