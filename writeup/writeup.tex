@@ -11,67 +11,171 @@
 
 In this assignment, we tackle the problem of Named Entity Recognition (NER). The goal of this task is to construct a model that can pick out and determine the type of important named entities in a given text. For example, in the sentence ``I went to Disney World.'', the block ``Disney World'' should be labeled as a special place. 
 
-We implement and discuss several approaches to NER in this paper, all trained on a portion of the CONLL 2003 Shared Task dataset. These include a standard Hidden Markov Model (HMM), a neural Maximum Entropy Markov Model (MEMM), and a structured perceptron. To label entities given our model outputs, we implement the Viterbi algorithm and the forward-backward algorithm. 
+We implement and discuss several approaches to NER in this paper, all trained on a portion of the CONLL 2003 Shared Task dataset. These include a standard Hidden Markov Model (HMM), a Maximum Entropy Markov Model (MEMM), and a structured perceptron. To label entities given our models, we implement the Viterbi algorithm.
 
-Furthermore, unlike previous assignments, feature selection is especially important for this problem. We implement several of the features described in in [Tjong Kim Sang paper] as well. 
+Furthermore, unlike previous assignments, feature selection is especially important for this problem (since we don't use dense representations as in neural networks). We implement several of the features described in in [Tjong Kim Sang paper] as well. 
 
 In Section 2, we give a formal description of our problem and establish our notation. In Section 3, we give detailed descriptions of the algorithms used for training and evaluation. In Section 4, we present our experimental results. In Section 5, we discuss our findings. 
 
 \section{Problem Description}
 
-We treat this as a tagging problem, similarly to HW2. To capture the named entities, which can span multiple words, we use a system called BIO tagging. A word tagged with an $I$ tag @TODO Explain BIO tagging? 
+We treat this as a tagging problem, similarly to HW2. To capture the named entities, which can span multiple words, we use a system called BIO tagging. A word tagged with an $I$ tag %%%TODO Explain BIO tagging? 
+We simply the task by only trying to predict the tags, and later extract the mentions from the predicted tag sequences by looking at contiguous blocks of the same tag.
 
-Our raw data consists of pairs $(w_i, t_i) \in \mcV \times \mcT$ for $i = 1, \dots, N$, where $N$ is our data size, where $w_i \in \mcV$ is a word in our corpus and $t_i$ is its corresponding BIO tag.
+
+Let $\mcV$ denote the vocabulary and $\mcT$ denote the tag set. We use start and end padding words \texttt{<s>}, \texttt{</s>} along with start and end tags \texttt{<t>} and \texttt{</t>} to denote the beginning and end of each sequence.
+
+ Our raw data consists of sentences $(w_1, \ldots, w_l)$ (denoted as $w_{1:l}$) with corresponding tags $(t_1, \ldots, t_l)$ (denoted as $t_{1:l}$) for $(w_i, t_i) \in \mcV \times \mcT$ and $l$ the length of the sentence. We want to learn a score function
+$$f : \mcV^l \times \mcT^l \to \mathbb{R}$$
+for any sentence length $l$, and our prediction will be $\argmax_{t_{1:l}} f(w_{1:l}, t_{1:l})$.
+
+\subsection{Markov Models}
+
+If we interpet $f$ probabilistically, we can write this as
+$$\log p(t_{1:l} | w) = \sum_{i=1}^l \log p(t_i | t_{i-1}, \ldots, t_1, w) $$
+In this problem, we typically make the Markovian assumption so that $p(t_i | t_{i-1}, \ldots, t_1, w) = p(t_i | t_{i-1}, w)$ \footnote{To handle the boundary case, we use $t_0 = \texttt{<s>}$ to get $p(t_1 | t_0, w)$. This will be implicit throughout.}.
+
+Denote $\widehat{y}(t_{i-1})_{t_i} = p(t_i | t_{i-1}, w)$. Thus we decompose our score function as
+$$f(w_{1:l}, t_{1:l}) = \sum_{i=1}^l \widehat{y}(t_{i-1}, w)_{t_i}$$
+In the Markov setup, our goal is to learn the transition function that takes as input $(t_{i-1}, w) \in \mcT \times \mcV^l$ and outputs a score vector $\mathbb{R}^{|\mcT|}$ as the score for each next tag. In practice, we don't use the whole sequence $w \in \mcV^l$ but featurize $(t_{i-1}, w)$ in a local window around $w_i$.
 
 \subsection{Feature Extraction}
 
-We construct a feature representation of each word $w$ as follows. 
+We describe details of the feature representation of $(t_{i-1}, w)$ around the word $w_i$.
 
-First, construct the vocabulary $\mcV$ of the training and testing sets. To keep this from growing too large, we only use lower-case words. Furthermore, we map any uncommon words to a special ``UNK'' word. A word is considered to be uncommon if it is not listed in the publically available Glove word embeddings. A word $w$ then can be associated with a sparse one-hot feature vector $\boldj \in \{0,1\}^{|\mcV|}$, with $1$ at the index $j \in \{1, 2, \dots, |\mcV|\}$ corresponding to $w$ in the vocabulary. 
+First, construct the vocabulary $\mcV$ of the training and testing sets. We only use lower-case words and encode them as sparse one-hot vectors $\boldj \in \{0,1\}^{|\mcV|}$.
+
+% we are not doing this
+%%Furthermore, we map any uncommon words to a special ``UNK'' word. A word is considered to be uncommon if it is not listed in the publically available Glove word embeddings. 
 
 Next, we construct a set $\mathcal{F}$ of features. We implement these based on papers from the CONLL 2003 shared task, but not all of them are used in our final models. The full set includes
 \begin{itemize}
   \item The lemma of a word, as given by the NLTK WordNet Lemmatizer. 
   \item The part of speech of a word as given by the NLTK averaged perceptron POS tagger. 
-  \item All possible substrings of a word. 
+  \item All possible substrings of a word.
+\subitem As a backoff, prefixes and suffixes of a certain length of a word.
   \item Capitalization information (is all caps, starts with a capitalized letter, or contains a capitalized letter) of a word.
 \end{itemize}
 
-We also make available the features (as given above) of surrounding words in an arbitrary window size. Each of these features has an index in $\mathcal{F}$, so we can associate a word $w$ to a $0-1$ vector in $\{0,1\}^{|\mathcal{F}|}$, where a $1$ at index $j$ indicates it has the feature at index $j$ and a $0$ indicates it does not have this feature. 
+We include the previous tag $t_{i-1}$ in this feature set as well. Also, we make available the features (as given above) of surrounding words in an arbitrary window around $w_i$ (we use a maximum window size of 5 words). Each of these features has an index in $\mathcal{F}$, so we can associate a word $w$ to a sparse vector in $\{0,1\}^{|\mathcal{F}|}$.
 
-Our goal is thus to learn a function $f: \{0,1\}^{|\mcV|} \times \{0,1\}^{|\mathcal{F}|} \to \mathbb{R}^{|\mcT|}$ that takes in a word and its associated features and outputs a prediction vector $\hat{\boldy}$ where $\hat{y}_k$ is the log probability that the word has tag $k$. 
+We then get a feature function $feat : \mcT \times \mcV^l \to \{0,1\}^{|\mcV|} \times \{0, 1\}^{|\mcF|}$, and we want to learn
+$$\widehat{y}: \{0,1\}^{|\mcV|} \times \{0,1\}^{|\mathcal{F}|} \to \mathbb{R}^{|\mcT|}$$
+that takes in a word and its associated features and outputs a prediction vector $\hat{\boldy}$ where $\hat{y}_k$ is the log probability that the word has tag $k$. 
 
-\subsection{Practice}
+\subsubsection{Practice}
 
-In practice, we represent $w$ with a vector of indexes, namely its index in $\mcV$ and a concatenated vector of all of its feature indicies in $\mathcal{F}$. To ensure that our feature representation of our data forms a matrix for Torch to work with, we pad the vectors with a special ``padding feature'' that has index $1$ in $\mathcal{F}$ to make them all the same length. 
+In practice, we use indices and LookupTable in Torch to handle the sparse vectors. To ensure that our feature representation of our data forms a matrix for Torch to work with, we pad the feature vectors with a special ``padding feature'' that has index $1$ in $\mathcal{F}$ to make them all the same length. 
+
+\subsection{Evaluation}
+
+To evaluate a predicted sequence of tags $\widehat{t_{1:l}}$ for given sentence $w_{1:l}$, we compared the mentions (contiguous blocks of non-O tags) to the mentions from the true sequence of tags $t_{1:l}$. We consider a single mention to be predicted correctly iff it matches up exactly with the mention from the true sequence.
+
+Then by collecting the counts of total true mentions, total predicted mentions, and total correctly predicted mentions over the entire dataset, we can form the precision and recall:
+$$prec = \frac{\text{total correctly predicted mentions}}{\text{total predicted mentions}}$$
+$$rec = \frac{\text{total correctly predicted mentions}}{\text{total true mentions}}$$
+Our metric is then the $F_\beta$ score for $\beta$ some parameter:
+$$F_\beta = \frac{(\beta^2 + 1) \cdot prec \cdot rec}{\beta^2 \cdot prec + rec}$$
+We use $\beta = 1$ as the balanced metric. 
+
+Note that the Kaggle metric doesn't use global counts, but computes the F-score per sentence.
 
 \section{Model and Algorithms}
 
-We use three models:
+We use three models to learn the transition function:
 \begin{itemize}
   \item Hidden Markov Model (HMM)
   \item Maximum Entropy Markov Model (MEMM)
   \item Structured Perceptron
 \end{itemize}
 
-Below we describe the setup of each. 
+We first describe the basic Viterbi decoding algorithm that uses the transition model to predict a sequence.
+
+\subsection{Viterbi}
+
+
+%%% NEEDS WORK - can be short 
 
 \subsection{Hidden Markov Model}
 
+With the HMM, we learn transition probabilities $p(t_i | t_{i-1})$ and emission probabilities $p(w_i | t_i)$ using the MLE estimates with count matrices. We use Laplace smoothing parameter $\alpha$, and we found $\alpha = 0.001$ worked best.
+
+We then predict our transition function as
+$$\widehat{y}(t_{i-1}, w)_{t_i} = \log p(t_i | t_{i-1}) + \log p(w_i | t_i)$$
+
 \subsection{Maximum Entropy Markov Model}
+
+This is essentially a logistic regression model where we use the features as described in the previous section. We have
+$$\widehat{y}(t_{i-1}, w) = \log softmax(feat(t_{i-1}, w)W + b)$$
+where $W$ is a $|\mcV| + |\mcF|$ by $|\mcT|$ weight matrix and $b$ is a 1 by $|\mcT|$ bias term.
+
+We train the MEMM with gradient descent by iterating over each word in the dataset (with its corresponding window of features and tag).
 
 \subsubsection{Extension: Neural MEMM}
 
+Instead of simple logistic regression, we can use more layers with nonlinearities to model $\widehat{y}$:
+$$\widehat{y}(t_{i-1}, w) = \log softmax( \tanh((feat'(t_{i-1}, w)W_0)W_1 + b_1)W_2 + b_2)$$
+$W_0$, a $|\mcV| + |\mcF|$ by $d_{in}$ matrix, is an embedding matrix for the words and features. In practice we use a reduced set of features with $feat'$ since dense word vectors should encode most of the information (we only used capitalization features and previous class $t_{i-1}$, see above section, in this setup). We also have
+$$W_1 \in \mathbb{R}^{d_{in} \times d_{hid}}, \quad b_1 \in \mathbb{R}^{d_{hid}},$$
+$$W_2 \in \mathbb{R}^{d_{hid} \times |\mcT|}, \quad b_2 \in \mathbb{R}^{|\mcT|}$$
+
+We also use SGD to train this model.
+
 \subsection{Structured Perceptron}
+
+In structured perceptron, we have a linear transition function
+$$\widehat{y}(t_{i-1}, w) = feat(t_{i-1}, w)W$$
+for $W$ a $|\mcV| + |\mcF|$ by $|\mcT|$ matrix.
+
+Our learning algorithm is different than before, however. For each sentence, we first produce a candidate tag sequence $\widehat{t_{1:l}}$ using Viterbi and our current model. Then, we compare this sequence with the gold sequence $t_{1:l}$, and for each difference in tags $\widehat{t_i}, t_i$, we give $+1$ for the weights in $W$ corresponding to features $feat(t_{i-1}, w)$ and class $t_i$ and $-1$ for those corresponding to class $\widehat{t_i}$.
+
+We iterate over the dataset using this learning method until convergence in F-score.
 
 \subsubsection{Extension: Averaged Weights}
 
+%%% NEEDS WORK
+
 \section{Experiments}
 
+We ran various experiments with feature selection and some hyperparameter tuning for all models. We evaluate with balanced F-score on the validation set.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lccr}
+ \toprule
+ Model &  &  & F-score \\
+ \midrule
+ HMM & & & 100000 \\
+ MEMM (features???) & & & 100000 \\
+ Neural MEMM & & & 0.728 \\
+ Perceptron & & & 100000
+\end{tabular}
+\caption{\label{tab:results} F-score for mentions on validation set.}
+\end{table}
+
+\subsection{Hidden Markov Model}
+
+%% needs work
+
+\subsection{Maximum Entropy Markov Model}
+
+We trained MEMM with batch SGD with batch size 32, learning rate 1, and trained for 20 epochs. %%?? confirm this
+
+\subsubsection{Extension: Neural MEMM}
+
+We used the same hyperparameters except for learning rate 0.01. We used $d_{in} = 50$ and initialized with the GLOVE embeddings, and $d_{hid} = 100$. Each epoch took about 17 s to train.
+
+We trained for 60 epochs and ended with an F-score of 0.728.
+
+\subsection{Structured Perceptron}
+
+%% needs work
 
 \section{Conclusion}
 
-End the write-up with a very short recap of the main experiments and the main results. Describe any challenges you may have faced, and what could have been improved in the model.
+We found that the neural MEMM worked best. %% elaborate?
+
+The most time consuming part of this homework for the non-neural MEMM was feature selection, which would significantly change performance depending on features used. This gives us a reason to prefer neural networks as a model easier to use without prior knowledge.
 
 \bibliographystyle{apalike}
 \bibliography{writeup}
