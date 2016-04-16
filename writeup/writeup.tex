@@ -15,41 +15,35 @@ We implement and discuss several approaches to NER in this paper, all trained on
 
 Furthermore, unlike previous assignments, feature selection is especially important for this problem. We implement several of the features described in in [Tjong Kim Sang paper] as well. 
 
-In Section 2, we give a formal description of our problem and establish our notation. In Section 3, we give detailed descriptions of the algorithms used for feature extraction, training, and evaluation. In Section 4, we present our experimental results. In Section 5, we discuss our findings. 
+In Section 2, we give a formal description of our problem and establish our notation. In Section 3, we give detailed descriptions of the algorithms used for training and evaluation. In Section 4, we present our experimental results. In Section 5, we discuss our findings. 
 
 \section{Problem Description}
 
-In general, homeworks will be specified using informal
-language. As part of the assignment, we expect you to write-out a
-definition of the problem and your model in formal language. For this
-class, we will use the following notation:
+We treat this as a tagging problem, similarly to HW2. To capture the named entities, which can span multiple words, we use a system called BIO tagging. A word tagged with an $I$ tag @TODO Explain BIO tagging? 
 
+Our raw data consists of pairs $(w_i, t_i) \in \mcV \times \mcT$ for $i = 1, \dots, N$, where $N$ is our data size, where $w_i \in \mcV$ is a word in our corpus and $t_i$ is its corresponding BIO tag.
+
+\subsection{Feature Extraction}
+
+We construct a feature representation of each word $w$ as follows. 
+
+First, construct the vocabulary $\mcV$ of the training and testing sets. To keep this from growing too large, we only use lower-case words. Furthermore, we map any uncommon words to a special ``UNK'' word. A word is considered to be uncommon if it is not listed in the publically available Glove word embeddings. A word $w$ then can be associated with a sparse one-hot feature vector $\boldj \in \{0,1\}^{|\mcV|}$, with $1$ at the index $j \in \{1, 2, \dots, |\mcV|\}$ corresponding to $w$ in the vocabulary. 
+
+Next, we construct a set $\mathcal{F}$ of features. We implement these based on papers from the CONLL 2003 shared task, but not all of them are used in our final models. The full set includes
 \begin{itemize}
-\item $\boldb, \boldm$;  bold letters for vectors.
-\item $\boldB, \boldM$;  bold capital letters for matrices.
-\item $\mcB, \mcM$;  script-case for sets.
-\item $b_i, x_i$; lower case for scalars or indexing into vectors.
+  \item The lemma of a word, as given by the NLTK WordNet Lemmatizer. 
+  \item The part of speech of a word as given by the NLTK averaged perceptron POS tagger. 
+  \item All possible substrings of a word. 
+  \item Capitalization information (is all caps, starts with a capitalized letter, or contains a capitalized letter) of a word.
 \end{itemize}
 
+We also make available the features (as given above) of surrounding words in an arbitrary window size. Each of these features has an index in $\mathcal{F}$, so we can associate a word $w$ to a $0-1$ vector in $\{0,1\}^{|\mathcal{F}|}$, where a $1$ at index $j$ indicates it has the feature at index $j$ and a $0$ indicates it does not have this feature. 
 
-For instance in natural language processing, it is common to use
-discrete sets like $\mcV$ for the vocabulary of the language, or $\mcT$ for a
-tag set of the language.  We might also want one-hot vectors
-representing words. These will be of the type
-$\boldv \in \{0,1\}^{|\mcV|}$. In a note, it is crucial to define the
-types of all variables that are introduced. The problem description is the
-right place to do this.
+Our goal is thus to learn a function $f: \{0,1\}^{|\mcV|} \times \{0,1\}^{|\mathcal{F}|} \to \mathbb{R}^{|\mcT|}$ that takes in a word and its associated features and outputs a prediction vector $\hat{\boldy}$ where $\hat{y}_k$ is the log probability that the word has tag $k$. 
 
-% NLP is also
-% full of sequences. For instance sentences, $w_1, \ldots, w_N$, where
-% here $N$ is a constant length and $w_i \in \mcV$ for all
-% $i \in \{1, \ldots N\}$. If we pretend sentences are all the same
-% length, we can have scoring function over sentences,
-% $s : \mcV^N \mapsto \reals$.  One might be defined as:
+\subsection{Practice}
 
-% \[ s(w_1, \ldots, w_N) = \sum_{i = 1}^N p(w_i | w_{i-2}, w_{i-1}), \]
-
-% \noindent where $p$ is the bigram probability, which we will cover later in the class.
+In practice, we represent $w$ with a vector of indexes, namely its index in $\mcV$ and a concatenated vector of all of its feature indicies in $\mathcal{F}$. To ensure that our feature representation of our data forms a matrix for Torch to work with, we pad the vectors with a special ``padding feature'' that has index $1$ in $\mathcal{F}$ to make them all the same length. 
 
 \section{Model and Algorithms}
 
