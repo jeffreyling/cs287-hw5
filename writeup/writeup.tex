@@ -13,15 +13,22 @@ In this assignment, we tackle the problem of Named Entity Recognition (NER). The
 
 We implement and discuss several approaches to NER in this paper, all trained on a portion of the CONLL 2003 Shared Task dataset. These include a standard Hidden Markov Model (HMM), a Maximum Entropy Markov Model (MEMM), and a structured perceptron. To label entities given our models, we implement the Viterbi algorithm.
 
-Furthermore, unlike previous assignments, feature selection is especially important for this problem (since we don't use dense representations as in neural networks). We implement several of the features described in in [Tjong Kim Sang paper] as well. 
+Furthermore, unlike previous assignments, feature selection is especially important for this problem (since we don't use dense representations as in neural networks). We implement several of the features described in in \cite{conll2003} as well. 
 
 In Section 2, we give a formal description of our problem and establish our notation. In Section 3, we give detailed descriptions of the algorithms used for training and evaluation. In Section 4, we present our experimental results. In Section 5, we discuss our findings. 
 
 \section{Problem Description}
 
-We treat this as a tagging problem, similarly to HW2. To capture the named entities, which can span multiple words, we use a system called BIO tagging. A word tagged with an $I$ tag %%%TODO Explain BIO tagging? 
-We simply the task by only trying to predict the tags, and later extract the mentions from the predicted tag sequences by looking at contiguous blocks of the same tag.
+We treat this as a tagging problem, similarly to HW2. To capture the named entities, which can span multiple words, we use a system called BIO tagging. The tags are given by 
+$$\{\text{I-LOC, I-PER, I-ORG, I-MISC, B-MISC, B-LOC, O}\}$$
 
+The suffixes LOC, PER, ORG, and MISC denote whether the named entity in question is a location, person, organization, or miscellaneous. The prefixes I, B, and O are used to split up our sequence of words into ``mentions'' of named entities and other words. 
+
+A word with an I tag indicates that it is in the start or middle of a mention of a named entity of the given tag class. A word with a B tag indicates it is at the end of a mention of a named entity of the given tag class. An O tag indicates that a word is not part of any mention. 
+
+In practice, the B tag is only needed to demarcate two consecutive mentions of the same type, and rarely occurs. 
+
+We simplfy the task by only trying to predict the tags, and later extract the mentions from the predicted tag sequences by looking at contiguous blocks of the same tag.
 
 Let $\mcV$ denote the vocabulary and $\mcT$ denote the tag set. We use start and end padding words \texttt{<s>}, \texttt{</s>} along with start and end tags \texttt{<t>} and \texttt{</t>} to denote the beginning and end of each sequence.
 
@@ -93,12 +100,26 @@ We first describe the basic Viterbi decoding algorithm that uses the transition 
 
 \subsection{Viterbi}
 
+Given a transition distribution of tags $p(t_i | t_{i-1})$, we want to predict the sequence of tags $t_1, \dots, t_n$ with the highest joint probability. 
 
-%%% NEEDS WORK - can be short 
+With our Markov assumption, this is equal to 
+$$p(t_1, \dots, t_n) = \prod_{i=1}^n p(t_i | t_{i-1}, \dots, t_1) = \prod_{i=1}^n p(t_i | t_{i-1})$$
+
+Note that the given product has a term $p(t_1)$, which we cannot calculate using the transition distribution. To avoid this, we pad our sequence of words with a start word $<s>$ and always set $t_1$ to be the start tag $<t>$. Furthermore, we observe that maximizing this product is the same thing as maximizing the sum of the log transition probabilities $\log p(t_i | t_{i-1})$. 
+
+This can be done by the Viterbi algorithm. 
+
+The algorithm inductively constructs a $\mcT \times n$ array $\pi$, where $\pi[t][i]$ is the maximum joint probability of a sequence of tags $t_1 = <t>, t_2, \dots, t_{i-1}, t$. 
+
+As a base case, we assume $t_1 = <t>$, setting $\pi[t][1] = 0$ for every $t \in \mcT$, and then setting $\pi[t][2] = \log p(t | <t>)$. 
+
+Then, we can inductively set $$\pi[t][i] = \text{max}_{t' \in \mcT} \pi[t'][i-1] + \log p(t | t')$$.
+
+In practice, we also construct a $\mcT \times n$ array of \emph{backpointers} $\mathbf{BP}$, where $$\mathbf{BP}[t][i] = \text{argmax}_{t' \in \mcT} \pi[t'][i-1] + \log p(t | t')$$. This allows us to construct our optimal sequence. First, by definition we can set our optimal $t_n = \argmax_{t \in \mcT} \pi[t][n]$. Then we can inductively see that the optimal $t_{i-1}$ is equal to $\mathbf{BP}[t_i][i]$, which gives us our full optimal sequence $t_1 = <s>, t_2, \dots, t_n$. 
 
 \subsection{Hidden Markov Model}
 
-With the HMM, we learn transition probabilities $p(t_i | t_{i-1})$ and emission probabilities $p(w_i | t_i)$ using the MLE estimates with count matrices. We use Laplace smoothing parameter $\alpha$, and we found $\alpha = 0.001$ worked best.
+With the HMM, we learn transition probabilities $p(t_i | t_{i-1})$ and emission probabilities $p(w_i | t_i)$ using the MLE estimates with count matrices. We use Laplace smoothing parameter $\alpha$, and we found $\alpha = 0.02$ worked best.
 
 We then predict our transition function as
 $$\widehat{y}(t_{i-1}, w)_{t_i} = \log p(t_i | t_{i-1}) + \log p(w_i | t_i)$$
@@ -133,11 +154,15 @@ We iterate over the dataset using this learning method until convergence in F-sc
 
 \subsubsection{Extension: Averaged Weights}
 
-%%% NEEDS WORK
+As an extension, we replace the weight matrix $W$ by its average across all training iterations. 
+
+In practice, this is done epoch-by-epoch. In a single epoch, the weight matrix $W$ is updated after every sentence of the text is processed. We store the sum of the weight matrices obtained after every sentence, and then divide it by the number of sentences and replace $W$ with this average at the end of the epoch. 
+
+This acts as a form of regularization for our structured perceptron and keeps its epoch-by-epoch performance much more consistent. 
 
 \section{Experiments}
 
-We ran various experiments with feature selection and some hyperparameter tuning for all models. We evaluate with balanced F-score on the validation set.
+We ran various experiments with feature selection and some hyperparameter tuning for all models. We evaluate with balanced F-score on the validation set, giving the best result for each model below. 
 
 \begin{table}[h]
 \centering
@@ -145,10 +170,10 @@ We ran various experiments with feature selection and some hyperparameter tuning
  \toprule
  Model &  &  & F-score \\
  \midrule
- HMM & & & 100000 \\
- MEMM (features???) & & & 100000 \\
+ HMM & & & 0.594 \\
+ MEMM & & & 0.660 \\
  Neural MEMM & & & 0.728 \\
- Perceptron & & & 100000
+ Perceptron & & & 0.682
 \end{tabular}
 \caption{\label{tab:results} F-score for mentions on validation set.}
 \end{table}
@@ -157,23 +182,107 @@ We ran various experiments with feature selection and some hyperparameter tuning
 
 %% needs work
 
+We optimized the smoothing parameter $\alpha$ in two steps. First, we searched along orders of magnitude from $10^{-4}$ to $1$. Then, for the given order of magnitude $10^{-k}$ with the highest F-score on the validation set, we searched for value $\alpha = i \cdot 10^{-k}$ with highest F-score across all $i \in \{1, 2, \dots, 10\}$. The full results of the search are given in the table below. 
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lccr}
+  \toprule
+  $\alpha$ & & & F-score \\
+  \midrule
+  0.0001 & & & 0.590 \\
+  0.001 & & & 0.590 \\
+  0.01 & & & 0.591 \\
+  0.1 & & & 0.557 \\
+  0.02 & & & 0.594 \\
+  0.03 & & & 0.588 \\
+  0.04 & & & 0.573 \\
+  0.05 & & & 0.570 \\
+  0.06 & & & 0.564 \\
+  0.07 & & & 0.561 \\
+  0.08 & & & 0.561 \\
+  0.09 & & & 0.559 \\
+  \end{tabular}
+  \caption{\label{tab:alpha} F-score for various values of $\alpha$}
+\end{table}
+
 \subsection{Maximum Entropy Markov Model}
 
-We trained MEMM with batch SGD with batch size 32, learning rate 1, and trained for 20 epochs. %%?? confirm this
+We trained MEMM with batch SGD with batch size 32, learning rate 1, and trained for 20 epochs. Each epoch took approximately 4 seconds to train. The loss curves for the training and validation sets for our best-performing MEMM are plotted in Figure $1$. 
+
+\begin{figure}[h]
+\centering
+\includegraphics[scale=0.4]{memm.png}
+\caption{Training curves for MEMM.}
+\end{figure}
+
+We also experimented with different feature sets to optimize the F-score. The features were selected from the following list:
+\begin{itemize}
+  \item Prefixes and suffixes of length $\leq 4$
+  \item Word lemmas
+  \item Parts of speech of our word and the two adjacent words
+  \item Capitalization information of our word
+\end{itemize}
+
+We calculated the validation set F-score for the MEMM for five feature sets. One set contained all four of these features, while the other four sets each excluded one of these types of features. The results are given below. 
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lccr}
+    \toprule
+    Feature Set & & & F-score \\
+    \midrule
+    All & & & 0.6605 \\
+    No Cap & & & 0.6267 \\
+    No Lemma & & & 0.6547 \\
+    No POS & & & 0.6603 \\
+    No Prefix/Suffix & & & 0.6127
+  \end{tabular}
+  \caption{F-score of MEMM for various feature sets}
+  \label{tab:memm}
+\end{table}
 
 \subsubsection{Extension: Neural MEMM}
 
-We used the same hyperparameters except for learning rate 0.01. We used $d_{in} = 50$ and initialized with the GLOVE embeddings, and $d_{hid} = 100$. Each epoch took about 17 s to train.
+We used the same hyperparameters except for learning rate 0.01. We used $d_{in} = 50$ and initialized with the GLOVE embeddings, and $d_{hid} = 100$. Each epoch took about 17 seconds to train.
 
 We trained for 60 epochs and ended with an F-score of 0.728.
 
 \subsection{Structured Perceptron}
 
-%% needs work
+We trained our structured perceptron with averaging for a minimum of $5$ epochs and a maximum of $10$ epochs, halting the program if the validation F-score is lower than that of the previous epoch. Each epoch took approximately 75 seconds to train. 
+
+Due to the structure of this model, the only metrics for performance we have is the epoch-to-epoch precision, recall, and F-score on the validation set. We plot the precision and recall curves for our best-performing perceptron in Figure 2. 
+
+\begin{figure}[h]
+\centering
+\includegraphics[scale=0.3]{perceptron.png}
+\caption{Precision and recall for structured perceptron}
+\end{figure}
+
+We performed the same feature selection experiments for the structured perceptron as we did for the MEMM. We give the maximum epoch-to-epoch F-score for each of the feature sets in the table below. 
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lccr}
+    \toprule
+    Feature Set & & & F-score \\
+    \midrule
+    All & & & 0.6827 \\
+    No Cap & & & 0.6378 \\
+    No Lemma & & & 0.6713 \\
+    No POS & & & 0.6629 \\
+    No Prefix/Suffix & & & 0.6530
+  \end{tabular}
+  \caption{F-score of MEMM for various feature sets}
+  \label{tab:perceptron}
+\end{table}
 
 \section{Conclusion}
 
-We found that the neural MEMM worked best. %% elaborate?
+We found that the neural MEMM worked best. This was not an unusual outcome, as many of the top papers in the CONLL 2003 shared task used MEMMs. Our neural MEMM used the GLOVE embeddings, which are a state-of-the-art dense representation for words, which is likely a much better set of features than the ones we used for our logistic regression MEMM. ,
+
+It should also be noted that our perceptron with averaging seemed to perform better than our logistic regression MEMM on the validation set. However, it performed much worse on Kaggle, so it is likely overfitted on the training set and just happened to perform somewhat well on the validation set. 
 
 The most time consuming part of this homework for the non-neural MEMM was feature selection, which would significantly change performance depending on features used. This gives us a reason to prefer neural networks as a model easier to use without prior knowledge.
 
